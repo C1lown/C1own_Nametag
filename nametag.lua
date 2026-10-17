@@ -1946,6 +1946,27 @@ addButton(playersTab, "Fetch online profiles now", function()
     status("Fetching online profiles...")
     task.spawn(function() pcall(refreshRemote) status("Online profiles updated") end)
 end)
+addButton(playersTab, "Debug: test online profiles", function()
+    status("Testing online profiles...")
+    task.spawn(function()
+        for _, plr in ipairs(Players:GetPlayers()) do
+            local url = PROFILE_URL .. plr.Name .. ".json"
+            local ok, body = pcall(function() return game:HttpGet(url) end)
+            if not ok then
+                print(("[nametag online] %s | no file or request failed: %s"):format(plr.Name, tostring(body):sub(1, 80)))
+            else
+                local okd, data = pcall(function() return HttpService:JSONDecode(body) end)
+                if okd and type(data) == "table" then
+                    print(("[nametag online] %s | FOUND | active=%s | title=%s"):format(plr.Name, tostring(data.active), tostring(data.title)))
+                else
+                    print(("[nametag online] %s | file found but INVALID JSON"):format(plr.Name))
+                end
+            end
+        end
+        print("[nametag online] URL used: " .. PROFILE_URL)
+        status("Online test done, see console (F9)")
+    end)
+end)
 
 connect(Players.PlayerAdded, function(plr)
     task.delay(2, function() pcall(fetchRemoteFor, plr) pcall(scanProfiles) end)
@@ -2010,4 +2031,3 @@ connect(UserInputService.InputBegan, function(i, gp)
     end
     if not gp and i.KeyCode.Name == cfg.menuKey then root.Visible = not root.Visible end
 end)
-
