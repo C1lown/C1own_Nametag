@@ -60,7 +60,7 @@ local DEFAULT = {
     beacon = true, notify = false,
     menuKey = "RightAlt",
     showOthers = true, -- show other script users' tags
-    autoProfiles = true, -- create a template profile file for every player in the server
+    autoProfiles = false, -- create a template profile file for every player in the server (off: it floods the workspace)
     decor = false, -- decorative images on the tag (emo theme)
     zoomScale = 60, -- 0 = normal world size, 100 = same size on screen at any zoom
 }
@@ -193,8 +193,7 @@ local function readProfile(plr)
                 local okd, data = pcall(function() return HttpService:JSONDecode(readfile(path)) end)
                 if okd and type(data) == "table" then
                     if data.active == false then
-                        warnOnce(path, "[nametag] " .. path .. " is ignored: \"active\" is false")
-                        break -- fall through to the online profile
+                        break -- inactive local file: fall through to the online profile (no console spam)
                     end
                     return data
                 else
