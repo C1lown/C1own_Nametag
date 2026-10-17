@@ -146,12 +146,29 @@ end
 -- online profiles (GitHub raw) ------------------------------------------
 local remote, remoteRaw = {}, {}
 
+local function httpGet(url)
+    local ok, body = pcall(function() return game:HttpGet(url) end)
+    if ok and type(body) == "string" then return true, body end
+    if not ok and tostring(body):find("404", 1, true) then return false, "404 not found" end
+    local req = (syn and syn.request) or (http and http.request) or http_request or request
+    if req then
+        local ok2, res = pcall(req, { Url = url, Method = "GET" })
+        if ok2 and type(res) == "table" then
+            local code = res.StatusCode or res.Status
+            if (code == 200 or res.Success == true) and type(res.Body) == "string" then return true, res.Body end
+            return false, "HTTP " .. tostring(code)
+        end
+        return false, tostring(res)
+    end
+    return false, tostring(body)
+end
+
 local function fetchRemoteFor(plr)
     local base = PROFILE_URL
     local key = plr.Name:lower()
     if type(base) ~= "string" or base == "" then remote[key], remoteRaw[key] = nil, nil return end
     if base:sub(-1) ~= "/" then base = base .. "/" end
-    local ok, body = pcall(function() return game:HttpGet(base .. plr.Name .. ".json") end)
+    local ok, body = httpGet(base .. plr.Name .. ".json")
     if not ok or type(body) ~= "string" then remote[key], remoteRaw[key] = nil, nil return end
     local okd, data = pcall(function() return HttpService:JSONDecode(body) end)
     if not (okd and type(data) == "table") then remote[key], remoteRaw[key] = nil, nil return end
@@ -160,7 +177,7 @@ local function fetchRemoteFor(plr)
     if type(ic) == "string" and ic:match("^[%w_%-]+%.[pPjJ][nNpP][gGeE]?[gG]?$") and writefile and isfile then
         local path = FOLDER .. "/" .. ic
         if not isfile(path) then
-            local oki, img = pcall(function() return game:HttpGet(base .. ic) end)
+            local oki, img = httpGet(base .. ic)
             if oki and type(img) == "string" and #img > 0 then pcall(writefile, path, img) end
         end
     end
@@ -1946,25 +1963,38 @@ addButton(playersTab, "Fetch online profiles now", function()
     status("Fetching online profiles...")
     task.spawn(function() pcall(refreshRemote) status("Online profiles updated") end)
 end)
+local dbgLbl = label(playersTab, "", 11, Enum.Font.Gotham, SUB)
+dbgLbl.Size = UDim2.new(1, 0, 0, 110)
+dbgLbl.TextWrapped = true
+dbgLbl.TextYAlignment = Enum.TextYAlignment.Top
 addButton(playersTab, "Debug: test online profiles", function()
     status("Testing online profiles...")
+    dbgLbl.Text = "Testing..."
     task.spawn(function()
+        local lines, checked, found, firstErr = {}, 0, 0, nil
         for _, plr in ipairs(Players:GetPlayers()) do
-            local url = PROFILE_URL .. plr.Name .. ".json"
-            local ok, body = pcall(function() return game:HttpGet(url) end)
-            if not ok then
-                print(("[nametag online] %s | no file or request failed: %s"):format(plr.Name, tostring(body):sub(1, 80)))
-            else
+            checked += 1
+            local ok, body = httpGet(PROFILE_URL .. plr.Name .. ".json")
+            if ok then
+                found += 1
                 local okd, data = pcall(function() return HttpService:JSONDecode(body) end)
                 if okd and type(data) == "table" then
-                    print(("[nametag online] %s | FOUND | active=%s | title=%s"):format(plr.Name, tostring(data.active), tostring(data.title)))
+                    lines[#lines + 1] = plr.Name .. ": found, active=" .. tostring(data.active)
                 else
-                    print(("[nametag online] %s | file found but INVALID JSON"):format(plr.Name))
+                    lines[#lines + 1] = plr.Name .. ": found but INVALID JSON"
                 end
+            elseif not firstErr and not tostring(body):find("404", 1, true) then
+                firstErr = tostring(body):sub(1, 60)
             end
         end
-        print("[nametag online] URL used: " .. PROFILE_URL)
-        status("Online test done, see console (F9)")
+        local out = ("checked %d players, %d files found\n"):format(checked, found)
+            .. (#lines > 0 and table.concat(lines, "\n") or "no profile files found")
+            .. (firstErr and ("\nrequest error: " .. firstErr) or "")
+            .. "\nurl: " .. PROFILE_URL
+        dbgLbl.Text = out
+        print("[nametag online] " .. out:gsub("\n", " | "))
+        pcall(function() if setclipboard then setclipboard(out) end end)
+        status("Online test done (result shown in the Players tab, also copied)")
     end)
 end)
 
