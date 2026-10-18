@@ -778,6 +778,28 @@ local function rescanForeign()
         if a and c and a:IsDescendantOf(c) then suppress(d) end
     end
 end
+-- AK-style scripts often keep other players' tags in YOUR PlayerGui / CoreGui / gethui,
+-- attached to their head, so look there too
+function peerForeign.scanAll()
+    local roots = { pg, CoreGui }
+    local okh, hui = pcall(function() return gethui and gethui() end)
+    if okh and hui and hui ~= CoreGui then roots[#roots + 1] = hui end
+    for _, root in ipairs(roots) do
+        local okd, list = pcall(root.GetDescendants, root)
+        if okd then
+            for _, d in ipairs(list) do
+                if d:IsA("BillboardGui") and not peerForeign.hidden[d] and isForeign(d)
+                    and d:FindFirstChildWhichIsA("TextLabel", true) then
+                    local a = d.Adornee or d.Parent
+                    local model = (a and a:IsA("BasePart")) and a:FindFirstAncestorOfClass("Model") or nil
+                    local plr = model and Players:GetPlayerFromCharacter(model)
+                    local pt = plr and plr ~= lp and peerTags[plr.UserId]
+                    if pt and pt.gui.Enabled then suppress(d, plr.UserId) end
+                end
+            end
+        end
+    end
+end
 local lastWantHide = true
 
 local hiddenHum
@@ -824,6 +846,10 @@ task.spawn(function()
         elseif hiddenHum then
             pcall(function() hiddenHum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.Viewer end)
             hiddenHum = nil
+        end
+
+        if peerForeign.tick % 5 == 0 and cfg.enabled and cfg.hideForeign and next(peerTags) then
+            pcall(peerForeign.scanAll)
         end
 
         -- other script users' tags
@@ -2040,6 +2066,37 @@ addButton(playersTab, "Debug: test online profiles", function()
         print("[nametag online] " .. out:gsub("\n", " | "))
         pcall(function() if setclipboard then setclipboard(out) end end)
         status("Online test done (result shown in the Players tab, also copied)")
+    end)
+end)
+
+addButton(playersTab, "Debug: find the AK USER tag", function()
+    dbgLbl.Text = "Searching..."
+    task.spawn(function()
+        local roots = { pg, CoreGui, workspace }
+        local okh, hui = pcall(function() return gethui and gethui() end)
+        if okh and hui and hui ~= CoreGui then roots[#roots + 1] = hui end
+        local out, found = {}, 0
+        for _, root in ipairs(roots) do
+            local okd, list = pcall(root.GetDescendants, root)
+            if okd then
+                for _, d in ipairs(list) do
+                    if found < 4 and d:IsA("TextLabel") and not d:IsDescendantOf(gui)
+                        and tostring(d.Text):lower():find("ak user", 1, true) then
+                        found += 1
+                        local bb = d:FindFirstAncestorOfClass("BillboardGui")
+                        local where = bb and ("BillboardGui, adornee=" .. tostring(bb.Adornee) .. ", parent=" .. tostring(bb.Parent))
+                            or "NOT inside a BillboardGui (screen-space drawing?)"
+                        out[#out + 1] = ("%d) %s | %s"):format(found, root.Name, where)
+                    end
+                end
+            end
+        end
+        local text = found > 0 and table.concat(out, "\n")
+            or "no text containing 'AK USER' found (try again while the tag is on screen)"
+        dbgLbl.Text = text
+        print("[nametag find] " .. text:gsub("\n", " || "))
+        pcall(function() if setclipboard then setclipboard(text) end end)
+        status("Search done (result shown in the Players tab, also copied)")
     end)
 end)
 
