@@ -65,6 +65,7 @@ local DEFAULT = {
     zoomScale = 60, -- 0 = normal world size, 100 = same size on screen at any zoom
     animLoop = true, -- Animations tab: loop the animation
     animSpeed = 10, -- Animations tab: speed in tenths (10 = normal)
+    kfX = 0, kfY = 0, kfZ = 0, kfTime = 0, kfSmooth = true, kfC0 = false, -- Keyframes tab
 }
 local cfg = {}
 for k, v in pairs(DEFAULT) do cfg[k] = v end
@@ -212,7 +213,8 @@ end
 -- profiles can change how a tag looks, never your private settings
 local BLOCKED = { menuKey = true, beacon = true, notify = true,
     showOthers = true, autoProfiles = true, hideForeign = true, hideDefault = true,
-    matchForeign = true, followForeign = true, enabled = true, animLoop = true, animSpeed = true }
+    matchForeign = true, followForeign = true, enabled = true, animLoop = true, animSpeed = true,
+    kfX = true, kfY = true, kfZ = true, kfTime = true, kfSmooth = true, kfC0 = true }
 local function mergeProfile(dst, prof)
     for k, v in pairs(prof) do
         if DEFAULT[k] ~= nil and not BLOCKED[k] and type(v) == type(DEFAULT[k]) then dst[k] = v end
@@ -2169,6 +2171,297 @@ do
     peerForeign.animStop = A.stop
 end
 
+-- ====================================================================
+-- Keyframes tab: pose your joints, add keyframes, play them back.
+-- Drives your own character's joints (Motor6D) every frame.
+-- ====================================================================
+do
+    local page = newTab("Keyframes")
+    local KF = {
+        mode = "idle", -- "idle" | "pose" | "play"
+        motors = {}, names = {}, orig = {}, joint = nil, jointIdx = 0,
+        pose = {},   -- [jointName] = Vector3 (degrees)
+        frames = {}, -- { t = seconds, pose = {...} }, sorted by t
+        playStart = 0,
+    }
+
+    function KF.collect()
+        KF.motors, KF.names, KF.orig = {}, {}, {}
+        local c = lp.Character
+        if not c then return false end
+        for _, d in ipairs(c:GetDescendants()) do
+            if d:IsA("Motor6D") and d.Part0 and d.Part1 and not KF.motors[d.Name] then
+                KF.motors[d.Name] = d
+                KF.orig[d.Name] = d.C0
+                KF.names[#KF.names + 1] = d.Name
+            end
+        end
+        table.sort(KF.names)
+        return #KF.names > 0
+    end
+
+    -- stop the default animations so they don't fight the pose
+    function KF.hold()
+        local c = lp.Character
+        local an = c and c:FindFirstChild("Animate")
+        if an then
+            KF.animate = an
+            local okd, was = pcall(function() return an.Disabled end)
+            KF.animateWas = okd and was or false
+            pcall(function() an.Disabled = true end)
+        end
+        local hum = c and c:FindFirstChildOfClass("Humanoid")
+        local animator = hum and hum:FindFirstChildOfClass("Animator")
+        if animator then
+            for _, tr in ipairs(animator:GetPlayingAnimationTracks()) do
+                if not table.find(markTracks, tr) then pcall(function() tr:Stop(0.1) end) end
+            end
+        end
+    end
+
+    function KF.release()
+        for name, m in pairs(KF.motors) do
+            if m.Parent then
+                pcall(function()
+                    m.C0 = KF.orig[name]
+                    m.Transform = CFrame.new()
+                end)
+            end
+        end
+        local an = KF.animate
+        if an and an.Parent then pcall(function() an.Disabled = KF.animateWas end) end
+        KF.animate = nil
+    end
+
+    function KF.begin(mode)
+        if KF.mode == "idle" then
+            if not KF.collect() then status("Can't find your character's joints") return false end
+            KF.hold()
+        end
+        KF.mode = mode
+        return true
+    end
+
+    function KF.stop()
+        local was = KF.mode
+        KF.mode = "idle"
+        if was ~= "idle" then KF.release() end
+    end
+
+    function KF.cf(v)
+        return CFrame.Angles(math.rad(v.X), math.rad(v.Y), math.rad(v.Z))
+    end
+
+    function KF.apply(poseTbl) -- poseTbl: [jointName] = CFrame
+        for name, m in pairs(KF.motors) do
+            if m.Parent then
+                local cf = poseTbl[name] or CFrame.new()
+                if cfg.kfC0 then
+                    m.C0 = KF.orig[name] * cf
+                    m.Transform = CFrame.new()
+                else
+                    m.C0 = KF.orig[name]
+                    m.Transform = cf
+                end
+            end
+        end
+    end
+
+    function KF.sample(t)
+        local fr, out = KF.frames, {}
+        if #fr == 0 then return out end
+        local a, b, alpha = fr[1], fr[1], 0
+        if t >= fr[#fr].t then
+            a, b = fr[#fr], fr[#fr]
+        elseif t > fr[1].t then
+            for i = 1, #fr - 1 do
+                if t >= fr[i].t and t <= fr[i + 1].t then
+                    a, b = fr[i], fr[i + 1]
+                    alpha = (t - a.t) / math.max(b.t - a.t, 1e-4)
+                    break
+                end
+            end
+        end
+        if cfg.kfSmooth then alpha = alpha * alpha * (3 - 2 * alpha) end
+        local names = {}
+        for n in pairs(a.pose) do names[n] = true end
+        for n in pairs(b.pose) do names[n] = true end
+        for n in pairs(names) do
+            local va, vb = a.pose[n] or Vector3.zero, b.pose[n] or Vector3.zero
+            out[n] = KF.cf(va):Lerp(KF.cf(vb), alpha)
+        end
+        return out
+    end
+
+    function KF.setJoint(i)
+        if #KF.names == 0 then return end
+        KF.jointIdx = (i - 1) % #KF.names + 1
+        KF.joint = KF.names[KF.jointIdx]
+        local v = KF.pose[KF.joint] or Vector3.zero
+        cfg.kfX, cfg.kfY, cfg.kfZ = math.floor(v.X + 0.5), math.floor(v.Y + 0.5), math.floor(v.Z + 0.5)
+        syncAll()
+        KF.jointBtn.Text = "Joint: " .. KF.joint .. "  (click for next)"
+    end
+
+    function KF.refresh()
+        local times = {}
+        for _, f in ipairs(KF.frames) do times[#times + 1] = ("%.1fs"):format(f.t) end
+        KF.listLbl.Text = ("Keyframes: %d  %s"):format(#KF.frames, #times > 0 and ("[" .. table.concat(times, ", ") .. "]") or "")
+    end
+
+    connect(RunService.Heartbeat, function()
+        if KF.mode == "idle" then return end
+        local first = KF.motors[KF.names[1]]
+        if not first or not first.Parent then KF.stop() return end -- respawned
+        if KF.mode == "pose" then
+            if KF.joint then KF.pose[KF.joint] = Vector3.new(cfg.kfX, cfg.kfY, cfg.kfZ) end
+            local tbl = {}
+            for n, v in pairs(KF.pose) do tbl[n] = KF.cf(v) end
+            KF.apply(tbl)
+        elseif KF.mode == "play" then
+            local last = KF.frames[#KF.frames]
+            local total = last and last.t or 0
+            local t = (os.clock() - KF.playStart) * (cfg.animSpeed / 10)
+            if total > 0 and t > total then
+                if cfg.animLoop then
+                    t = t % total
+                else
+                    KF.stop()
+                    status("Finished")
+                    return
+                end
+            end
+            KF.apply(KF.sample(t))
+        end
+    end)
+
+    -- UI -------------------------------------------------------------
+    addLabel(page, "Pose")
+    addButton(page, "Start posing", function()
+        if KF.begin("pose") then
+            KF.setJoint(KF.joint and KF.jointIdx or 1)
+            status("Posing: pick a joint and move the sliders")
+        end
+    end)
+    KF.jointBtn = addButton(page, "Joint: (press Start posing first)", function()
+        if KF.mode ~= "pose" then status("Press Start posing first") return end
+        KF.setJoint(KF.jointIdx + 1)
+    end)
+    addSlider(page, "Rotate X (degrees)", "kfX", -180, 180)
+    addSlider(page, "Rotate Y (degrees)", "kfY", -180, 180)
+    addSlider(page, "Rotate Z (degrees)", "kfZ", -180, 180)
+    addButton(page, "Reset this joint", function()
+        if KF.mode ~= "pose" or not KF.joint then return end
+        KF.pose[KF.joint] = nil
+        cfg.kfX, cfg.kfY, cfg.kfZ = 0, 0, 0
+        syncAll()
+    end)
+    addButton(page, "Clear whole pose", function()
+        KF.pose = {}
+        if KF.joint then KF.setJoint(KF.jointIdx) end
+    end)
+
+    addLabel(page, "Keyframes")
+    addSlider(page, "Time of keyframe (tenths of a second)", "kfTime", 0, 100)
+    addButton(page, "Add keyframe (captures the whole pose)", function()
+        if KF.mode ~= "pose" then status("Press Start posing first") return end
+        local snap = {}
+        for n, v in pairs(KF.pose) do snap[n] = v end
+        local t = cfg.kfTime / 10
+        for i = #KF.frames, 1, -1 do
+            if math.abs(KF.frames[i].t - t) < 1e-4 then table.remove(KF.frames, i) end
+        end
+        table.insert(KF.frames, { t = t, pose = snap })
+        table.sort(KF.frames, function(x, y) return x.t < y.t end)
+        KF.refresh()
+        status(("Keyframe added at %.1fs"):format(t))
+    end)
+    addButton(page, "Delete last keyframe", function()
+        table.remove(KF.frames)
+        KF.refresh()
+    end)
+    addButton(page, "Clear all keyframes", function()
+        KF.frames = {}
+        KF.refresh()
+    end)
+    KF.listLbl = label(page, "", 12, Enum.Font.Gotham, SUB)
+    KF.listLbl.Size = UDim2.new(1, 0, 0, 34)
+    KF.listLbl.TextWrapped = true
+    KF.listLbl.TextYAlignment = Enum.TextYAlignment.Top
+    KF.refresh()
+
+    addLabel(page, "Playback")
+    addButton(page, "Play keyframes", function()
+        if #KF.frames == 0 then status("Add at least one keyframe first") return end
+        if KF.begin("play") then
+            KF.playStart = os.clock()
+            status("Playing keyframes")
+        end
+    end)
+    addButton(page, "Stop and restore my character", function()
+        KF.stop()
+        status("Stopped, character restored")
+    end)
+    addToggle(page, "Loop", "animLoop")
+    addSlider(page, "Speed (10 = normal)", "animSpeed", 1, 40)
+    addToggle(page, "Smooth (ease in and out)", "kfSmooth")
+    addToggle(page, "Write joint offsets (C0) instead of Transform", "kfC0")
+
+    addLabel(page, "Save / load (workspace/c1lown_nametag/anims)")
+    KF.nameBox = newBox(page, "Animation name, e.g. wave1", 34)
+    addButton(page, "Save keyframes to file", function()
+        local name = (KF.nameBox.Text:gsub("[^%w_%-]", ""))
+        if name == "" then status("Type a name first (letters and numbers)") return end
+        if #KF.frames == 0 then status("No keyframes to save") return end
+        if not (writefile and makefolder and isfolder) then status("Executor can't write files") return end
+        pcall(function()
+            if not isfolder(FOLDER) then makefolder(FOLDER) end
+            if not isfolder(FOLDER .. "/anims") then makefolder(FOLDER .. "/anims") end
+        end)
+        local data = { frames = {} }
+        for _, f in ipairs(KF.frames) do
+            local pose = {}
+            for n, v in pairs(f.pose) do pose[n] = { v.X, v.Y, v.Z } end
+            data.frames[#data.frames + 1] = { t = f.t, pose = pose }
+        end
+        local okj, json = pcall(function() return HttpService:JSONEncode(data) end)
+        local path = FOLDER .. "/anims/" .. name .. ".json"
+        if okj and pcall(writefile, path, json) then
+            status("Saved " .. path)
+        else
+            status("Couldn't save the file")
+        end
+    end)
+    addButton(page, "Load keyframes from file", function()
+        local name = (KF.nameBox.Text:gsub("[^%w_%-]", ""))
+        local path = FOLDER .. "/anims/" .. name .. ".json"
+        if name == "" or not (isfile and readfile and isfile(path)) then status("No saved animation with that name") return end
+        local ok, data = pcall(function() return HttpService:JSONDecode(readfile(path)) end)
+        if not ok or type(data) ~= "table" or type(data.frames) ~= "table" then status("Couldn't read that file") return end
+        local frames = {}
+        for _, f in ipairs(data.frames) do
+            if type(f) == "table" and type(f.t) == "number" and type(f.pose) == "table" then
+                local pose = {}
+                for n, a in pairs(f.pose) do
+                    if type(a) == "table" and tonumber(a[1]) and tonumber(a[2]) and tonumber(a[3]) then
+                        pose[n] = Vector3.new(a[1], a[2], a[3])
+                    end
+                end
+                frames[#frames + 1] = { t = f.t, pose = pose }
+            end
+        end
+        table.sort(frames, function(x, y) return x.t < y.t end)
+        KF.frames = frames
+        KF.refresh()
+        status(("Loaded %d keyframes"):format(#frames))
+    end)
+    local note = label(page, "Poses your joints locally every frame. Whether other players see it depends on the game: test with a friend. Respawning stops it.", 12, Enum.Font.Gotham, SUB)
+    note.Size = UDim2.new(1, 0, 0, 62)
+    note.TextWrapped = true
+    note.TextYAlignment = Enum.TextYAlignment.Top
+    peerForeign.kfStop = KF.stop
+end
+
 local miscTab = newTab("About")
 addLabel(miscTab, "Your executor")
 local execLbl = label(miscTab, "Detected: " .. execName .. (execKey and "  (shared with other script users)" or "  (not in the known list, others see a plain tag)"), 12, Enum.Font.Gotham, TEXT)
@@ -2177,6 +2470,7 @@ execLbl.TextWrapped = true
 addLabel(miscTab, "Menu")
 local function unloadAll()
     pcall(function() if peerForeign.animStop then peerForeign.animStop() end end)
+    pcall(function() if peerForeign.kfStop then peerForeign.kfStop() end end)
     pcall(function() if editName then stopEditing() end end)
     pcall(stopBeacon)
     pcall(stopCopy)
