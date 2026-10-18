@@ -654,11 +654,14 @@ end
 -- your tag follows the other script's nametag button.
 local ZERO = UDim2.new(0, 0, 0, 0)
 local origProps = {} -- [BillboardGui] = { size = UDim2, clips = bool }
+-- other players' overhead tags (e.g. "AK USER") that we hid because we show their custom tag
+local peerForeign = { hidden = {}, tick = 0 } -- hidden[BillboardGui] = userId
 
-local function suppress(d)
+local function suppress(d, uid)
     if not isForeign(d) then return end
     if not (cfg.enabled and cfg.hideForeign) then return end
     hiddenForeign[d] = true
+    if uid then peerForeign.hidden[d] = uid end
     if not origProps[d] then
         -- the real size is kept on the tag itself, so a re-executed script
         -- never mistakes the shrunk size for the original
@@ -676,6 +679,7 @@ local function suppress(d)
         origProps[d] = { size = sz, clips = clips and true or false }
     end
     local function hide()
+        if not hiddenForeign[d] then return end
         if not (cfg.enabled and cfg.hideForeign) then return end
         if d.Size ~= ZERO then
             origProps[d].size = d.Size -- other script resized it: remember, hide again
@@ -690,19 +694,37 @@ local function suppress(d)
     end
 end
 
+function peerForeign.restoreTag(d)
+    local o = origProps[d]
+    hiddenForeign[d] = nil -- first, so the Size watcher stops re-hiding it
+    peerForeign.hidden[d] = nil
+    origProps[d] = nil
+    if d.Parent and o then
+        d.Size = o.size
+        d.ClipsDescendants = o.clips
+        pcall(function()
+            d:SetAttribute("c1lownSize", nil)
+            d:SetAttribute("c1lownClips", nil)
+        end)
+    end
+end
+
 local function restoreForeign()
-    for d in pairs(hiddenForeign) do
-        local o = origProps[d]
-        if d.Parent and o then
-            d.Size = o.size
-            d.ClipsDescendants = o.clips
-            pcall(function()
-                d:SetAttribute("c1lownSize", nil)
-                d:SetAttribute("c1lownClips", nil)
-            end)
+    for d in pairs(hiddenForeign) do peerForeign.restoreTag(d) end
+end
+
+function peerForeign.restore(uid)
+    for d, u in pairs(peerForeign.hidden) do
+        if u == uid then peerForeign.restoreTag(d) end
+    end
+end
+
+function peerForeign.scan(uid, char)
+    if not char then return end
+    for _, d in ipairs(char:GetDescendants()) do
+        if d:IsA("BillboardGui") and not peerForeign.hidden[d] and d:FindFirstChildWhichIsA("TextLabel", true) then
+            suppress(d, uid)
         end
-        origProps[d] = nil
-        hiddenForeign[d] = nil
     end
 end
 
@@ -713,7 +735,7 @@ local seenOn = false
 local function foreignState()
     local on = false
     for d in pairs(hiddenForeign) do
-        if d.Parent and d:FindFirstChildWhichIsA("TextLabel", true) then
+        if d.Parent and not peerForeign.hidden[d] and d:FindFirstChildWhichIsA("TextLabel", true) then
             if d.Enabled and (d.Adornee ~= nil or d.Parent:IsA("BasePart")) then
                 on = true
                 seenOn = true
@@ -762,6 +784,7 @@ local hiddenHum
 task.spawn(function()
     while gui.Parent do
         task.wait(0.2)
+        peerForeign.tick = peerForeign.tick + 1
         local wantHide = cfg.enabled and cfg.hideForeign
         if not wantHide then restoreForeign() end
         if wantHide and not lastWantHide then rescanForeign() end
@@ -774,7 +797,7 @@ task.spawn(function()
         mimic = nil
         if cfg.enabled and cfg.hideForeign and cfg.matchForeign then
             for d in pairs(hiddenForeign) do
-                if d.Parent and d:FindFirstChildWhichIsA("TextLabel", true) then
+                if d.Parent and not peerForeign.hidden[d] and d:FindFirstChildWhichIsA("TextLabel", true) then
                     local a = d.Adornee or d.Parent
                     local ad = (a and a:IsA("BasePart") and c and a:IsDescendantOf(c)) and a or nil
                     mimic = {
@@ -812,6 +835,13 @@ task.spawn(function()
                 and (d.title ~= "" or d.sub ~= "" or pt.icon.Image ~= "")
             pt.gui.Adornee = pshow and ph or nil
             pt.gui.Enabled = pshow and true or false
+
+            -- replace their other overhead tag (e.g. "AK USER") with ours
+            if pshow and cfg.hideForeign then
+                if peerForeign.tick % 5 == 0 then peerForeign.scan(uid, plr and plr.Character) end
+            elseif next(peerForeign.hidden) then
+                peerForeign.restore(uid)
+            end
 
             -- profile players: swap their default name for the profile tag
             local phum = plr and plr.Character and plr.Character:FindFirstChildOfClass("Humanoid")
@@ -1299,6 +1329,7 @@ local function getPeerTag(plr)
 end
 
 local function removePeer(uid)
+    peerForeign.restore(uid)
     local hm = peerHum[uid]
     if hm then
         pcall(function() hm.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.Viewer end)
