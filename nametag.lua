@@ -2421,6 +2421,16 @@ do
             and ("Animation: " .. importPick.names[importPick.idx] .. "  (" .. #importPick.names .. " found, click for next)")
             or "Animation: (parse the pasted text first)"
     end
+    addButton(page, "Paste from clipboard", function()
+        if not getclipboard then status("Executor can't read the clipboard (no getclipboard)") return end
+        local ok, text = pcall(getclipboard)
+        if not ok or type(text) ~= "string" or text:match("^%s*$") then
+            status("Clipboard is empty or couldn't be read")
+            return
+        end
+        importBox.Text = text
+        status(("Pasted %d characters from clipboard. Press Parse next."):format(#text))
+    end)
     addButton(page, "Parse pasted data", function()
         local src = importBox.Text
         if src:match("^%s*$") then status("Paste a keyframe table first") return end
