@@ -1268,8 +1268,7 @@ local function tpTo(plr)
     local r = c and c:FindFirstChild("HumanoidRootPart")
     local mine = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
     if not (r and mine) then status("Can't teleport: no character") return end
-    local pos = r.Position + r.CFrame.LookVector * 4 + Vector3.new(0, 1.5, 0)
-    mine.CFrame = CFrame.lookAt(pos, r.Position)
+    mine.CFrame = r.CFrame -- their exact position and facing
     status("Teleported to " .. plr.DisplayName)
 end
 
