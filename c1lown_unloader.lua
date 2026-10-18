@@ -141,7 +141,7 @@ statusLbl = label(statusBar, "Ready", 11, Enum.Font.Gotham, SUBC)
 statusLbl.Position, statusLbl.Size = UDim2.fromOffset(10, 0), UDim2.new(1, -20, 1, 0)
 statusLbl.TextTruncate = Enum.TextTruncate.AtEnd
 
-local TABS = { "c1lown", "GUIs", "Game", "Links" }
+local TABS = { "c1lown", "GUIs", "Game", "Links", "View" }
 local currentTab = "c1lown"
 local tabButtons = {}
 local tabBar = mk("Frame", { Position = UDim2.fromOffset(10, 50), Size = UDim2.new(1, -20, 0, 32), BackgroundTransparency = 1 }, root)
@@ -814,6 +814,111 @@ local function buildLinks()
 end
 
 -- ====================================================================
+-- View tab: everything in one list, each with a View button
+-- ====================================================================
+local viewFilter = ""
+
+local function buildView()
+    infoLabel("Tap View on anything to see its raw contents: script source, GUI trees, c1lown entries, connection details.", 34)
+    local box = mk("TextBox", {
+        Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = PANELC, BackgroundTransparency = 0.25, Text = viewFilter,
+        PlaceholderText = "Filter by name", PlaceholderColor3 = SUBC, TextColor3 = TEXTC, ClearTextOnFocus = false,
+        Font = Enum.Font.Gotham, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = nextOrder(),
+    }, scroll)
+    corner(box, 10)
+    ustroke(box, STROKEC, 1, 0.4)
+    mk("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) }, box)
+
+    local rows = {}
+    local function addRow(name, subText, producer)
+        local row = makeRow(name, subText, {
+            { text = "View", action = function() showRaw(name, producer) end },
+        })
+        rows[#rows + 1] = { row = row, key = (name .. " " .. subText):lower() }
+    end
+    local function section(text)
+        local l = label(scroll, string.upper(text), 11, Enum.Font.GothamBold, SUBC)
+        l.Size = UDim2.new(1, 0, 0, 18)
+        l.LayoutOrder = nextOrder()
+    end
+
+    -- c1lown scripts
+    section("c1lown scripts")
+    local names = {}
+    for name in pairs(env.c1lownScripts) do names[#names + 1] = name end
+    table.sort(names)
+    if #names == 0 then infoLabel("None registered.", 18) end
+    for _, name in ipairs(names) do
+        local info = env.c1lownScripts[name]
+        addRow(name, name == SELF_NAME and "this menu" or "c1lown script", function()
+            return describeRegistry(name, info)
+        end)
+    end
+
+    -- GUIs
+    section("GUIs")
+    local guiCount = 0
+    for _, pair in ipairs(guiContainers()) do
+        local container, tag = pair[1], pair[2]
+        local okc, kids = pcall(function() return container:GetChildren() end)
+        if okc then
+            for _, g in ipairs(kids) do
+                if g:IsA("ScreenGui") and g ~= gui and not PROTECTED[g.Name] then
+                    guiCount += 1
+                    addRow(g.Name, tag, function()
+                        return ("ScreenGui \"%s\"  (%s)\n\n%s"):format(g.Name, tag, dumpGui(g))
+                    end)
+                end
+            end
+        end
+    end
+    if guiCount == 0 then infoLabel("No script GUIs found.", 18) end
+
+    -- game scripts
+    section("Game scripts")
+    local list = listLocalScripts()
+    if #list == 0 then infoLabel("No LocalScripts found.", 18) end
+    for idx, sc in ipairs(list) do
+        if idx > 80 then
+            infoLabel("...and " .. (#list - 80) .. " more (list capped at 80).", 18)
+            break
+        end
+        addRow(sc.Name, shortPath(sc), function() return describeScript(sc) end)
+    end
+
+    -- executor connections
+    section("Executor connections")
+    if not getconnections then
+        infoLabel("Not available (executor has no getconnections).", 18)
+    else
+        local found, total = scanLinks()
+        if total == 0 then infoLabel("None found.", 18) end
+        for idx, f in ipairs(found) do
+            if idx > 60 then
+                infoLabel("...and " .. (#found - 60) .. " more (list capped at 60).", 18)
+                break
+            end
+            addRow(f.name .. "  #" .. idx, briefFn(f.conn.Function), function()
+                return describeConnection(f.name, f.conn)
+            end)
+        end
+    end
+
+    local function applyFilter()
+        local q = viewFilter:lower()
+        for _, r in ipairs(rows) do
+            r.row.Visible = (q == "") or (r.key:find(q, 1, true) ~= nil)
+        end
+    end
+    box:GetPropertyChangedSignal("Text"):Connect(function()
+        viewFilter = box.Text
+        applyFilter()
+    end)
+    applyFilter()
+    bigButton("Refresh", false, function() rebuild(true) end)
+end
+
+-- ====================================================================
 -- Tab plumbing
 -- ====================================================================
 function rebuild(keep)
@@ -823,7 +928,8 @@ function rebuild(keep)
     if currentTab == "c1lown" then buildC1lown()
     elseif currentTab == "GUIs" then buildGuis()
     elseif currentTab == "Game" then buildGame()
-    elseif currentTab == "Links" then buildLinks() end
+    elseif currentTab == "Links" then buildLinks()
+    elseif currentTab == "View" then buildView() end
     if keep then
         task.defer(function() scroll.CanvasPosition = pos end)
     end
