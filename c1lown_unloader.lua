@@ -223,7 +223,9 @@ local function makeRow(titleText, subText, buttons)
         BorderSizePixel = 0, LayoutOrder = nextOrder(),
     }, scroll)
     corner(row, 12)
-    local rightPad = 12 + 80 * #buttons
+    local bw = (#buttons >= 3) and 58 or 72
+    local step = bw + 8
+    local rightPad = 12 + step * #buttons
     local t = label(row, titleText, 13, Enum.Font.GothamMedium, TEXTC)
     t.Position, t.Size = UDim2.fromOffset(14, 7), UDim2.new(1, -rightPad - 14, 0, 18)
     t.TextTruncate = Enum.TextTruncate.AtEnd
@@ -232,14 +234,299 @@ local function makeRow(titleText, subText, buttons)
     s.TextTruncate = Enum.TextTruncate.AtEnd
     for idx, bd in ipairs(buttons) do
         local b = mk("TextButton", {
-            AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8 - 80 * (idx - 1), 0.5, 0),
-            Size = UDim2.fromOffset(72, 30), BackgroundColor3 = BTNC, BackgroundTransparency = 0.2,
+            AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8 - step * (idx - 1), 0.5, 0),
+            Size = UDim2.fromOffset(bw, 30), BackgroundColor3 = BTNC, BackgroundTransparency = 0.2,
             Text = bd.text, TextColor3 = TEXTC, Font = Enum.Font.GothamMedium, TextSize = 12, AutoButtonColor = true,
         }, row)
         corner(b, 10)
         wireButton(b, bd.text, bd.confirm, bd.action)
     end
     return row
+end
+
+-- ====================================================================
+-- Raw viewer: shows the raw contents of whatever you pick
+--   scripts     -> decompiled source (executor decompile) / bytecode info
+--   GUIs        -> every instance with its main properties
+--   registry    -> the entry, its unload function, and its GUI
+--   connections -> function info, constants, upvalues
+-- ====================================================================
+local GUI_OF = { Nametag = "c1lownNametagGui", Reanimation = "c1lownReanimGui", Unloader = GUI_NAME }
+
+local function pathOf(inst)
+    local ok, p = pcall(function() return inst:GetFullName() end)
+    return ok and p or tostring(inst)
+end
+local function short(v, n)
+    local t = tostring(v):gsub("[%c]", " ")
+    n = n or 80
+    if #t > n then t = t:sub(1, n - 3) .. "..." end
+    return t
+end
+
+local PROPS = { "Text", "Image", "Visible", "Size", "Position", "AnchorPoint", "BackgroundColor3",
+    "BackgroundTransparency", "TextColor3", "Enabled", "ZIndex" }
+
+local function dumpGui(g)
+    local lines, count = {}, 0
+    local function visit(inst, depth)
+        count += 1
+        if count > 2500 then return end
+        local parts = {}
+        for _, pn in ipairs(PROPS) do
+            local ok, v = pcall(function() return inst[pn] end)
+            if ok and v ~= nil then parts[#parts + 1] = pn .. "=" .. short(v) end
+        end
+        lines[#lines + 1] = string.rep("  ", depth) .. inst.ClassName .. ' "' .. inst.Name .. '"'
+            .. (#parts > 0 and ("  { " .. table.concat(parts, ", ") .. " }") or "")
+        for _, c in ipairs(inst:GetChildren()) do visit(c, depth + 1) end
+    end
+    visit(g, 0)
+    if count > 2500 then lines[#lines + 1] = "... truncated at 2500 instances" end
+    return table.concat(lines, "\n")
+end
+
+local function describeFunction(fn)
+    if type(fn) ~= "function" then return "(not a function)" end
+    local L = { "Function: " .. tostring(fn) }
+    if iscclosure then
+        local ok, r = pcall(iscclosure, fn)
+        if ok then L[#L + 1] = "C closure: " .. tostring(r) end
+    end
+    if islclosure then
+        local ok, r = pcall(islclosure, fn)
+        if ok then L[#L + 1] = "Lua closure: " .. tostring(r) end
+    end
+    if debug and debug.info then
+        local ok, src, line, name = pcall(debug.info, fn, "sln")
+        if ok then
+            L[#L + 1] = ("debug.info: source=%s  line=%s  name=%s"):format(tostring(src), tostring(line), tostring(name))
+        end
+        local ok2, np, va = pcall(debug.info, fn, "a")
+        if ok2 then L[#L + 1] = "params: " .. tostring(np) .. (va and " (vararg)" or "") end
+    end
+    local okE, fenv = pcall(getfenv, fn)
+    if okE and type(fenv) == "table" then
+        local okS, sc = pcall(function() return fenv.script end)
+        if okS then
+            L[#L + 1] = "env.script: " .. ((typeof(sc) == "Instance") and pathOf(sc) or tostring(sc))
+        end
+    end
+    if debug and debug.getinfo then
+        local ok, t = pcall(debug.getinfo, fn)
+        if ok and type(t) == "table" then
+            local keys = {}
+            for k, v in pairs(t) do
+                if type(v) ~= "function" and type(v) ~= "table" then keys[#keys + 1] = tostring(k) end
+            end
+            table.sort(keys)
+            L[#L + 1] = "debug.getinfo:"
+            for _, k in ipairs(keys) do L[#L + 1] = "  " .. k .. " = " .. short(t[k], 120) end
+        end
+    end
+    local function listing(titleText, fnName)
+        local f = debug and debug[fnName]
+        if not f then return end
+        local ok, t = pcall(f, fn)
+        if ok and type(t) == "table" then
+            L[#L + 1] = ""
+            L[#L + 1] = titleText
+            local n = 0
+            for i, v in pairs(t) do
+                n += 1
+                if n > 150 then L[#L + 1] = "  ... more omitted" break end
+                L[#L + 1] = ("  [%s] %s: %s"):format(tostring(i), typeof(v), short(v, 100))
+            end
+            if n == 0 then L[#L + 1] = "  (none)" end
+        end
+    end
+    listing("Constants:", "getconstants")
+    listing("Upvalues:", "getupvalues")
+    if debug and debug.getprotos then
+        local ok, t = pcall(debug.getprotos, fn)
+        if ok and type(t) == "table" then L[#L + 1] = ""  L[#L + 1] = "Inner functions: " .. #t end
+    end
+    return table.concat(L, "\n")
+end
+
+local function briefFn(fn)
+    if debug and debug.info then
+        local ok, src, line = pcall(debug.info, fn, "sl")
+        if ok and src then return short(tostring(src) .. ":" .. tostring(line), 60) end
+    end
+    return short(fn, 60)
+end
+
+local function describeConnection(sigName, conn)
+    local L = { "Signal: " .. sigName }
+    pcall(function() L[#L + 1] = "Enabled: " .. tostring(conn.Enabled) end)
+    pcall(function() L[#L + 1] = "ForeignState: " .. tostring(conn.ForeignState) end)
+    L[#L + 1] = "Made by: executor script (not a game script)"
+    L[#L + 1] = ""
+    L[#L + 1] = describeFunction(conn.Function)
+    return table.concat(L, "\n")
+end
+
+local function describeScript(sc)
+    local L = { "-- " .. sc.ClassName .. ' "' .. sc.Name .. '"', "-- Path: " .. pathOf(sc) }
+    pcall(function() L[#L + 1] = "-- Disabled: " .. tostring(sc.Disabled) end)
+    if getscriptbytecode then
+        local ok, bc = pcall(getscriptbytecode, sc)
+        if ok and type(bc) == "string" then L[#L + 1] = "-- Bytecode: " .. #bc .. " bytes" end
+    end
+    L[#L + 1] = ""
+    local src
+    if decompile then
+        local ok, res = pcall(decompile, sc)
+        if ok and type(res) == "string" and res ~= "" then
+            src = res
+        else
+            L[#L + 1] = "-- decompile failed: " .. tostring(res)
+        end
+    end
+    if not src then
+        local ok, res = pcall(function() return sc.Source end)
+        if ok and type(res) == "string" and res ~= "" then src = res end
+    end
+    L[#L + 1] = src or "-- no source available (this executor has no decompile, and Source is empty on the client)"
+    return table.concat(L, "\n")
+end
+
+local function describeRegistry(name, info)
+    local L = { "Registry entry: " .. name, "" }
+    local keys = {}
+    for k in pairs(info) do keys[#keys + 1] = tostring(k) end
+    table.sort(keys)
+    for _, k in ipairs(keys) do
+        local v = info[k]
+        if type(v) == "function" then
+            L[#L + 1] = k .. " ->"
+            L[#L + 1] = describeFunction(v)
+        else
+            L[#L + 1] = k .. " = " .. short(v, 120)
+        end
+        L[#L + 1] = ""
+    end
+    local guiName = GUI_OF[name]
+    if guiName then
+        local g
+        for _, c in ipairs({ gethui and gethui() or nil, CoreGui, lp:FindFirstChild("PlayerGui") }) do
+            local ok, f = pcall(function() return c and c:FindFirstChild(guiName) end)
+            if ok and f then g = f break end
+        end
+        if g then
+            L[#L + 1] = "GUI tree (" .. guiName .. "):"
+            L[#L + 1] = dumpGui(g)
+        end
+    end
+    return table.concat(L, "\n")
+end
+
+-- viewer window ------------------------------------------------------------
+local viewer = mk("Frame", {
+    Position = UDim2.fromOffset(12, 54), Size = UDim2.new(1, -24, 1, -54 - 42), BackgroundTransparency = 1, Visible = false,
+}, root)
+local vBack = mk("TextButton", {
+    Size = UDim2.fromOffset(64, 30), BackgroundColor3 = BTNC, BackgroundTransparency = 0.2, Text = "‹ Back",
+    TextColor3 = TEXTC, Font = Enum.Font.GothamMedium, TextSize = 12, AutoButtonColor = true,
+}, viewer)
+corner(vBack, 10)
+local vTitle = label(viewer, "", 13, Enum.Font.GothamBold, TEXTC)
+vTitle.Position, vTitle.Size = UDim2.fromOffset(72, 0), UDim2.new(1, -72 - 136, 0, 30)
+vTitle.TextTruncate = Enum.TextTruncate.AtEnd
+local vCopy = mk("TextButton", {
+    AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -66, 0, 0), Size = UDim2.fromOffset(60, 30),
+    BackgroundColor3 = BTNC, BackgroundTransparency = 0.2, Text = "Copy", TextColor3 = TEXTC,
+    Font = Enum.Font.GothamMedium, TextSize = 12, AutoButtonColor = true,
+}, viewer)
+corner(vCopy, 10)
+local vSave = mk("TextButton", {
+    AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, 0), Size = UDim2.fromOffset(60, 30),
+    BackgroundColor3 = BTNC, BackgroundTransparency = 0.2, Text = "Save", TextColor3 = TEXTC,
+    Font = Enum.Font.GothamMedium, TextSize = 12, AutoButtonColor = true,
+}, viewer)
+corner(vSave, 10)
+local vScroll = mk("ScrollingFrame", {
+    Position = UDim2.fromOffset(0, 38), Size = UDim2.new(1, 0, 1, -38), BackgroundColor3 = PANELC, BackgroundTransparency = 0.25,
+    BorderSizePixel = 0, ScrollBarThickness = 3, ScrollBarImageColor3 = GREEN,
+    AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(),
+}, viewer)
+corner(vScroll, 12)
+mk("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }, vScroll)
+mk("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8), PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8) }, vScroll)
+
+local rawText, rawTitle = "", "raw"
+local MAX_LINES = 3000
+local function setViewerText(text)
+    rawText = text
+    for _, c in ipairs(vScroll:GetChildren()) do
+        if not (c:IsA("UIListLayout") or c:IsA("UIPadding")) then c:Destroy() end
+    end
+    local lines = {}
+    for line in (text:gsub("\r", "") .. "\n"):gmatch("(.-)\n") do lines[#lines + 1] = line end
+    local shown = math.min(#lines, MAX_LINES)
+    local i, chunk = 1, 0
+    while i <= shown do
+        local j = math.min(i + 99, shown)
+        chunk += 1
+        mk("TextBox", {
+            LayoutOrder = chunk, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+            BackgroundTransparency = 1, Text = table.concat(lines, "\n", i, j), TextColor3 = TEXTC,
+            Font = Enum.Font.Code, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
+            TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = true, MultiLine = true,
+            TextEditable = false, ClearTextOnFocus = false,
+        }, vScroll)
+        i = j + 1
+    end
+    if #lines > shown then
+        mk("TextLabel", {
+            LayoutOrder = chunk + 1, Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1,
+            Text = ("... %d more lines hidden, Copy or Save has the full text"):format(#lines - shown),
+            TextColor3 = SUBC, Font = Enum.Font.Gotham, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left,
+        }, vScroll)
+    end
+    vScroll.CanvasPosition = Vector2.new(0, 0)
+end
+
+local viewToken = 0
+local function closeViewer()
+    viewToken += 1
+    viewer.Visible = false
+    scroll.Visible = true
+    tabBar.Visible = true
+end
+vBack.MouseButton1Click:Connect(closeViewer)
+vCopy.MouseButton1Click:Connect(function()
+    if setclipboard then
+        setclipboard(rawText)
+        status("Copied " .. #rawText .. " characters")
+    else
+        status("No clipboard here, use Save")
+    end
+end)
+vSave.MouseButton1Click:Connect(function()
+    local fname = "c1lown_raw_" .. rawTitle:gsub("[^%w_%-]", "_") .. ".txt"
+    if writefile and pcall(writefile, fname, rawText) then
+        status("Saved " .. fname)
+    else
+        status("Couldn't save (executor has no writefile)")
+    end
+end)
+
+local function showRaw(titleText, producer)
+    viewToken += 1
+    local token = viewToken
+    rawTitle = titleText
+    scroll.Visible = false
+    tabBar.Visible = false
+    viewer.Visible = true
+    vTitle.Text = titleText
+    setViewerText("Loading...")
+    task.spawn(function()
+        local ok, res = pcall(producer)
+        if token ~= viewToken or not viewer.Visible then return end
+        setViewerText(ok and tostring(res) or ("Error: " .. tostring(res)))
+    end)
 end
 
 -- ====================================================================
@@ -263,6 +550,9 @@ local function buildC1lown()
                 status("Unloading " .. name)
                 pcall(info.unload)
                 if not isSelf then rebuild(true) end
+            end },
+            { text = "View", action = function()
+                showRaw(name, function() return describeRegistry(name, info) end)
             end },
         })
     end
@@ -354,6 +644,11 @@ local function buildGuis()
                             unloadGui(g)
                             rebuild(true)
                         end },
+                        { text = "View", action = function()
+                            showRaw(g.Name, function()
+                                return ("ScreenGui \"%s\"  (%s)\n\n%s"):format(g.Name, tag, dumpGui(g))
+                            end)
+                        end },
                     })
                 end
             end
@@ -420,6 +715,9 @@ local function buildGame()
                 status("Destroyed " .. s.Name)
                 rebuild(true)
             end },
+            { text = "View", action = function()
+                showRaw(s.Name, function() return describeScript(s) end)
+            end },
         })
     end
     bigButton("Refresh", false, function() rebuild(true) end)
@@ -483,17 +781,25 @@ local function buildLinks()
         return
     end
     local found, total = scanLinks()
-    local counts, names = {}, {}
-    for _, f in ipairs(found) do
-        if not counts[f.name] then counts[f.name] = 0 names[#names + 1] = f.name end
-        counts[f.name] += 1
-    end
-    table.sort(names)
     if total == 0 then
         infoLabel("No executor connections found.", 20)
     else
-        for _, n in ipairs(names) do
-            makeRow(n, counts[n] .. " executor connection(s)", {})
+        for idx, f in ipairs(found) do
+            if idx > 60 then
+                infoLabel("...and " .. (#found - 60) .. " more (list capped at 60).", 20)
+                break
+            end
+            local fn = f.conn.Function
+            makeRow(f.name .. "  #" .. idx, briefFn(fn), {
+                { text = "Cut", confirm = true, action = function()
+                    pcall(function() f.conn:Disconnect() end)
+                    status("Cut one " .. f.name .. " connection")
+                    rebuild(true)
+                end },
+                { text = "View", action = function()
+                    showRaw(f.name .. " connection", function() return describeConnection(f.name, f.conn) end)
+                end },
+            })
         end
         bigButton(("Disconnect all %d executor connection(s)"):format(total), true, function()
             local cut = 0
