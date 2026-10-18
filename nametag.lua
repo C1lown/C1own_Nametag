@@ -251,15 +251,20 @@ local function resolveAsset(src)
     if src:match("^https?://") then
         -- image link: download once into the workspace, then load it from there
         if not (writefile and isfile and getcustomasset) then return nil end
+        -- Discord links carry expiring ?ex=...&hm=... tokens: cache by the part before the "?"
+        local key = src
+        if src:match("^https?://[%w%.]*discordapp%.") then key = (src:gsub("%?.*$", "")) end
         local hash = 5381
-        for i = 1, #src do hash = (hash * 33 + src:byte(i)) % 4294967296 end
-        local ext = (src:match("%.(%a+)[^%.]*$") or "png"):lower()
+        for i = 1, #key do hash = (hash * 33 + key:byte(i)) % 4294967296 end
+        local ext = (key:match("%.(%a+)[^%.]*$") or "png"):lower()
         if ext ~= "png" and ext ~= "jpg" and ext ~= "jpeg" then ext = "png" end
         local path = FOLDER .. "/img_" .. hash .. "." .. ext
         local okf, exists = pcall(isfile, path)
         if not (okf and exists) then
             local okd, data = httpGet(src)
-            if not okd or type(data) ~= "string" or #data == 0 then return nil end
+            if not okd or type(data) ~= "string" or #data < 8 then return nil end
+            -- only keep real PNG / JPEG data (an expired link returns an error page)
+            if not (data:sub(1, 4) == "\137PNG" or data:sub(1, 2) == "\255\216") then return nil end
             if not pcall(writefile, path, data) then return nil end
         end
         local oka, asset = pcall(getcustomasset, path)
@@ -555,16 +560,10 @@ local function setIcon(src)
     if id then
         localTag.icon.Image = "rbxassetid://" .. id
     elseif src:match("^https?://") then
-        if not (writefile and getcustomasset) then return false, "Executor can't load linked images" end
-        local okd, data = pcall(game.HttpGet, game, src)
-        if not okd or type(data) ~= "string" or #data == 0 then return false, "Couldn't download that link" end
-        local ext = (src:match("%.(%a+)[^%.]*$") or "png"):lower()
-        if ext ~= "png" and ext ~= "jpg" and ext ~= "jpeg" then ext = "png" end
-        local file = "c1lown_nametag_icon_" .. os.time() .. "." .. ext
-        if not pcall(writefile, file, data) then return false, "Couldn't save the image" end
-        local oka, asset = pcall(getcustomasset, file)
-        if not oka then return false, "Couldn't load the image file" end
-        localTag.icon.Image = asset
+        if not (writefile and isfile and getcustomasset) then return false, "Executor can't load linked images" end
+        local a = resolveAsset(src)
+        if not a then return false, "Couldn't load that link (expired, or not a direct PNG/JPG link?)" end
+        localTag.icon.Image = a
     else
         if not (isfile and getcustomasset) then return false, "Executor can't load local files" end
         if not isfile(src) then return false, "File not found in workspace: " .. src end
