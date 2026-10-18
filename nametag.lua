@@ -248,6 +248,23 @@ local function resolveAsset(src)
     local id = src:match("^(%d+)$") or src:match("^rbxassetid://(%d+)$") or src:match("[?&]id=(%d+)")
     if id then return "rbxassetid://" .. id end
     if src:match("^rbxthumb://") or src:match("^rbxasset://") then return src end
+    if src:match("^https?://") then
+        -- image link: download once into the workspace, then load it from there
+        if not (writefile and isfile and getcustomasset) then return nil end
+        local hash = 5381
+        for i = 1, #src do hash = (hash * 33 + src:byte(i)) % 4294967296 end
+        local ext = (src:match("%.(%a+)[^%.]*$") or "png"):lower()
+        if ext ~= "png" and ext ~= "jpg" and ext ~= "jpeg" then ext = "png" end
+        local path = FOLDER .. "/img_" .. hash .. "." .. ext
+        local okf, exists = pcall(isfile, path)
+        if not (okf and exists) then
+            local okd, data = httpGet(src)
+            if not okd or type(data) ~= "string" or #data == 0 then return nil end
+            if not pcall(writefile, path, data) then return nil end
+        end
+        local oka, asset = pcall(getcustomasset, path)
+        return oka and asset or nil
+    end
     if not (isfile and getcustomasset) then return nil end
     for _, path in ipairs({ FOLDER .. "/" .. src, src }) do
         local okf, exists = pcall(isfile, path)
@@ -1689,9 +1706,8 @@ local function saveLookProfile(name)
     end)
     local data = { active = true }
     for _, k in ipairs(LOOK_KEYS) do data[k] = cfg[k] end
-    -- links can't be loaded for other players, so only IDs and files are saved
+    -- links, IDs and repo files are all saved as written
     local icon = tostring(cfg.icon or "")
-    if icon:match("^https?://") then icon = "" end
     local rel = icon:match("^" .. FOLDER .. "/(.+)$")
     data.icon = rel or icon
     local okj, json = pcall(function() return HttpService:JSONEncode(data) end)
