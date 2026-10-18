@@ -349,6 +349,183 @@ local function describeFunction(fn)
     return table.concat(L, "\n")
 end
 
+-- Trace: reconstruct what the code behind a GUI contains. The original source text is
+-- normally not kept anywhere, but the running functions are, so this collects them
+-- (callbacks on the GUI's objects, everything reachable from them, and anything holding
+-- a reference to the GUI) and dumps their constants, upvalues and strings.
+local TRACE_SIGNALS = {
+    "MouseButton1Click", "MouseButton1Down", "MouseButton1Up", "MouseButton2Click", "Activated", "InputBegan",
+    "InputEnded", "InputChanged", "MouseEnter", "MouseLeave", "MouseMoved", "FocusLost", "Focused", "Changed",
+    "ChildAdded", "AncestryChanged",
+}
+
+local function traceGui(g)
+    if not getconnections then
+        return "getconnections isn't available in this executor, so the callbacks behind this GUI can't be traced."
+    end
+    local haveDebug = debug and debug.getupvalues and debug.getconstants
+    local funcs, order, origin = {}, {}, {}
+    local counts = { direct = 0, reach = 0, gc = 0 }
+
+    local function addFn(fn, why, kind)
+        if type(fn) ~= "function" or funcs[fn] or ownFns[fn] then return false end
+        if iscclosure then
+            local ok, c = pcall(iscclosure, fn)
+            if ok and c then return false end
+        end
+        funcs[fn] = true
+        order[#order + 1] = fn
+        origin[fn] = why
+        counts[kind] += 1
+        return true
+    end
+
+    -- 1) callbacks connected to the GUI's own objects
+    local nodes = g:GetDescendants()
+    nodes[#nodes + 1] = g
+    for _, d in ipairs(nodes) do
+        for _, sn in ipairs(TRACE_SIGNALS) do
+            local okS, sig = pcall(function() return d[sn] end)
+            if okS and typeof(sig) == "RBXScriptSignal" then
+                local okc, list = pcall(getconnections, sig)
+                if okc and type(list) == "table" then
+                    for _, c in ipairs(list) do
+                        local okf, fn = pcall(function() return c.Function end)
+                        if okf then addFn(fn, d.ClassName .. ' "' .. d.Name .. '" .' .. sn, "direct") end
+                    end
+                end
+            end
+        end
+    end
+
+    -- 2) functions reachable through upvalues
+    local walked = 0
+    local function walk()
+        if not haveDebug then return end
+        while walked < #order and #order < 400 do
+            walked += 1
+            local fn = order[walked]
+            local ok, ups = pcall(debug.getupvalues, fn)
+            if ok and type(ups) == "table" then
+                for _, v in pairs(ups) do
+                    if type(v) == "function" then
+                        addFn(v, "upvalue of function #" .. walked, "reach")
+                    elseif type(v) == "table" then
+                        local n = 0
+                        for _, vv in pairs(v) do
+                            n += 1
+                            if n > 80 then break end
+                            if type(vv) == "function" then addFn(vv, "stored in a table used by function #" .. walked, "reach") end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    walk()
+
+    -- 3) any other function that holds one of the GUI's objects (update loops etc.)
+    if getgc and haveDebug then
+        local okg, gc = pcall(getgc, true)
+        if okg and type(gc) == "table" then
+            local t0, scanned = os.clock(), 0
+            for _, obj in ipairs(gc) do
+                scanned += 1
+                if scanned % 3000 == 0 then task.wait() end
+                if os.clock() - t0 > 8 then break end
+                if type(obj) == "function" and not funcs[obj] and not ownFns[obj] then
+                    local isC = false
+                    if iscclosure then
+                        local okc, c = pcall(iscclosure, obj)
+                        isC = okc and c
+                    end
+                    if not isC then
+                        local oku, ups = pcall(debug.getupvalues, obj)
+                        if oku and type(ups) == "table" then
+                            for _, v in pairs(ups) do
+                                if typeof(v) == "Instance" and (v == g or v:IsDescendantOf(g)) then
+                                    addFn(obj, "holds a reference to the GUI", "gc")
+                                    break
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        walk()
+    end
+
+    if #order == 0 then
+        return 'No code is attached to "' .. g.Name .. '" that I can see.\n\n'
+            .. "Possible reasons: the GUI is only drawn (no buttons or listeners), its connections are hidden by the "
+            .. "executor, or this executor lacks the debug library functions needed."
+    end
+
+    -- strings and asset ids across every function
+    local strings, seenS, ids, seenI = {}, {}, {}, {}
+    local function addId(n)
+        if not seenI[n] then seenI[n] = true ids[#ids + 1] = n end
+    end
+    if haveDebug then
+        for _, fn in ipairs(order) do
+            local ok, consts = pcall(debug.getconstants, fn)
+            if ok and type(consts) == "table" then
+                for _, v in pairs(consts) do
+                    if type(v) == "string" and #v >= 2 and #v <= 240 and not seenS[v] then
+                        seenS[v] = true
+                        strings[#strings + 1] = v
+                        for id in v:gmatch("%d%d%d%d%d%d%d+") do addId(id) end
+                    elseif type(v) == "number" and v >= 1000000 and v == math.floor(v) then
+                        addId(string.format("%d", v))
+                    end
+                end
+            end
+        end
+    end
+    table.sort(strings)
+
+    local L = {}
+    L[#L + 1] = 'Trace of ScreenGui "' .. g.Name .. '"'
+    L[#L + 1] = "Note: the original source text is usually not kept. Constants, strings, upvalues and function layout below are exact."
+    L[#L + 1] = ""
+    L[#L + 1] = ("Functions found: %d  (on GUI objects: %d, reachable from them: %d, holding the GUI: %d)")
+        :format(#order, counts.direct, counts.reach, counts.gc)
+    L[#L + 1] = ""
+    L[#L + 1] = ("== Asset IDs and large numbers (%d) =="):format(#ids)
+    for i, id in ipairs(ids) do
+        if i > 400 then L[#L + 1] = "... more omitted" break end
+        L[#L + 1] = tostring(id)
+    end
+    L[#L + 1] = ""
+    L[#L + 1] = ("== Strings used by the code (%d) =="):format(#strings)
+    for i, v in ipairs(strings) do
+        if i > 600 then L[#L + 1] = "... more omitted (see the function dumps)" break end
+        L[#L + 1] = ("%q"):format(v)
+    end
+    L[#L + 1] = ""
+    L[#L + 1] = "== Functions =="
+    for i, fn in ipairs(order) do
+        if i > 80 then
+            L[#L + 1] = ""
+            L[#L + 1] = ("... %d more functions not detailed (their strings are in the lists above)"):format(#order - 80)
+            break
+        end
+        L[#L + 1] = ""
+        L[#L + 1] = ("---- #%d  [%s]"):format(i, origin[fn])
+        L[#L + 1] = describeFunction(fn)
+        if decompile and i <= 20 then
+            local okd, res = pcall(decompile, fn)
+            if okd and type(res) == "string" and res ~= "" then
+                L[#L + 1] = ""
+                L[#L + 1] = "decompile:"
+                L[#L + 1] = res
+            end
+        end
+    end
+    return table.concat(L, "\n")
+end
+
 local function briefFn(fn)
     if debug and debug.info then
         local ok, src, line = pcall(debug.info, fn, "sl")
@@ -713,6 +890,9 @@ local function buildGuis()
                                 return ("ScreenGui \"%s\"  (%s)\n\n%s"):format(g.Name, tag, dumpGui(g))
                             end)
                         end },
+                        { text = "Trace", action = function()
+                            showRaw(g.Name .. " trace", function() return traceGui(g) end)
+                        end },
                     })
                 end
             end
@@ -894,10 +1074,12 @@ local function buildView()
     mk("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) }, box)
 
     local rows = {}
-    local function addRow(name, subText, producer, isCode)
-        local row = makeRow(name, subText, {
-            { text = "View", action = function() showRaw(name, producer, isCode) end },
-        })
+    local function addRow(name, subText, producer, isCode, traceFn)
+        local btns = { { text = "View", action = function() showRaw(name, producer, isCode) end } }
+        if traceFn then
+            btns[2] = { text = "Trace", action = function() showRaw(name .. " trace", traceFn) end }
+        end
+        local row = makeRow(name, subText, btns)
         rows[#rows + 1] = { row = row, key = (name .. " " .. subText):lower() }
     end
     local function section(text)
@@ -931,7 +1113,7 @@ local function buildView()
                     guiCount += 1
                     addRow(g.Name, tag, function()
                         return ("ScreenGui \"%s\"  (%s)\n\n%s"):format(g.Name, tag, dumpGui(g))
-                    end)
+                    end, false, function() return traceGui(g) end)
                 end
             end
         end
