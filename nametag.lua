@@ -2190,10 +2190,12 @@ do
         local c = lp.Character
         if not c then return false end
         for _, d in ipairs(c:GetDescendants()) do
-            if d:IsA("Motor6D") and d.Part0 and d.Part1 and not KF.motors[d.Name] then
-                KF.motors[d.Name] = d
-                KF.orig[d.Name] = d.C0
-                KF.names[#KF.names + 1] = d.Name
+            -- keyed by the moved part's name (e.g. "RightHand", "UpperTorso"), which is
+            -- what most reanimation keyframe files use, rather than the Motor6D's own name
+            if d:IsA("Motor6D") and d.Part0 and d.Part1 and d.Part1.Name ~= "" and not KF.motors[d.Part1.Name] then
+                KF.motors[d.Part1.Name] = d
+                KF.orig[d.Part1.Name] = d.C0
+                KF.names[#KF.names + 1] = d.Part1.Name
             end
         end
         table.sort(KF.names)
@@ -2267,6 +2269,12 @@ do
         end
     end
 
+    local function toCF(x)
+        if typeof(x) == "CFrame" then return x end
+        if typeof(x) == "Vector3" then return KF.cf(x) end
+        return CFrame.new()
+    end
+
     function KF.sample(t)
         local fr, out = KF.frames, {}
         if #fr == 0 then return out end
@@ -2288,7 +2296,7 @@ do
         for n in pairs(b.pose) do names[n] = true end
         for n in pairs(names) do
             local va, vb = a.pose[n] or Vector3.zero, b.pose[n] or Vector3.zero
-            out[n] = KF.cf(va):Lerp(KF.cf(vb), alpha)
+            out[n] = toCF(va):Lerp(toCF(vb), alpha)
         end
         return out
     end
@@ -2389,6 +2397,78 @@ do
     KF.listLbl.TextWrapped = true
     KF.listLbl.TextYAlignment = Enum.TextYAlignment.Top
     KF.refresh()
+
+    addLabel(page, "Import animation data")
+    local importNote = label(page, "Paste a keyframe table (the kind exported by Roblox's animation editor / reanimation tools: return { [\"Name\"] = { {Time=.., Data={...}}, ... } }).", 11, Enum.Font.Gotham, SUB)
+    importNote.Size = UDim2.new(1, 0, 0, 44)
+    importNote.TextWrapped = true
+    importNote.TextYAlignment = Enum.TextYAlignment.Top
+    local importBox = mk("TextBox", {
+        Size = UDim2.new(1, 0, 0, 90), BackgroundColor3 = ELEM, TextColor3 = TEXT,
+        PlaceholderText = "Paste here", PlaceholderColor3 = Color3.fromRGB(125, 125, 145), Text = "",
+        ClearTextOnFocus = false, Font = Enum.Font.Code, TextSize = 11,
+        TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+        TextWrapped = true, MultiLine = true, ClipsDescendants = true,
+    }, page)
+    corner(importBox, 8)
+    ustroke(importBox)
+    mk("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8), PaddingTop = UDim.new(0, 6) }, importBox)
+
+    local importPick = { names = {}, idx = 1, data = nil }
+    local importPickBtn
+    local function refreshImportPick()
+        importPickBtn.Text = (#importPick.names > 0)
+            and ("Animation: " .. importPick.names[importPick.idx] .. "  (" .. #importPick.names .. " found, click for next)")
+            or "Animation: (parse the pasted text first)"
+    end
+    addButton(page, "Parse pasted data", function()
+        local src = importBox.Text
+        if src:match("^%s*$") then status("Paste a keyframe table first") return end
+        local func, err = loadstring(src)
+        if not func then status("Couldn't parse: " .. tostring(err)) return end
+        local ok, data = pcall(func)
+        if not ok then status("Error running the pasted data: " .. tostring(data)) return end
+        if type(data) ~= "table" then status("That didn't return a table") return end
+        if type(data[1]) == "table" and data[1].Time ~= nil then
+            data = { ["(unnamed)"] = data } -- a single list of keyframes, not wrapped in a name
+        end
+        local names = {}
+        for k, v in pairs(data) do
+            if type(v) == "table" and type(v[1]) == "table" and v[1].Time ~= nil then
+                table.insert(names, k)
+            end
+        end
+        table.sort(names)
+        if #names == 0 then status("No keyframe animations found in that data") return end
+        importPick.names, importPick.idx, importPick.data = names, 1, data
+        refreshImportPick()
+        status(("Found %d animation(s). Pick one below, then press Import."):format(#names))
+    end)
+    importPickBtn = addButton(page, "Animation: (parse the pasted text first)", function()
+        if #importPick.names == 0 then status("Parse the pasted data first") return end
+        importPick.idx = importPick.idx % #importPick.names + 1
+        refreshImportPick()
+    end)
+    addButton(page, "Import selected animation into Keyframes", function()
+        if not importPick.data or #importPick.names == 0 then status("Parse the pasted data first") return end
+        local name = importPick.names[importPick.idx]
+        local framesSrc = importPick.data[name]
+        local frames = {}
+        for _, kf in ipairs(framesSrc) do
+            if type(kf) == "table" and type(kf.Time) == "number" and type(kf.Data) == "table" then
+                local pose = {}
+                for joint, cf in pairs(kf.Data) do
+                    if typeof(cf) == "CFrame" then pose[joint] = cf end
+                end
+                table.insert(frames, { t = kf.Time, pose = pose })
+            end
+        end
+        table.sort(frames, function(a, b) return a.t < b.t end)
+        if #frames == 0 then status("No usable keyframes in that animation") return end
+        KF.frames = frames
+        KF.refresh()
+        status(("Imported '%s': %d keyframes. Press Play keyframes below to try it."):format(name, #frames))
+    end)
 
     addLabel(page, "Playback")
     addButton(page, "Play keyframes", function()
