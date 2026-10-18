@@ -456,11 +456,34 @@ mk("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }, vScroll)
 mk("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8), PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8) }, vScroll)
 
 local rawText, rawTitle = "", "raw"
+local editMode, viewIsCode = false, false
+
+-- second toolbar (code views only): Edit / Execute
+local vBar = mk("Frame", { Position = UDim2.fromOffset(0, 38), Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1, Visible = false }, viewer)
+local vEdit = mk("TextButton", {
+    Size = UDim2.new(0.5, -4, 1, 0), BackgroundColor3 = BTNC, BackgroundTransparency = 0.2, Text = "Edit",
+    TextColor3 = TEXTC, Font = Enum.Font.GothamMedium, TextSize = 12, AutoButtonColor = true,
+}, vBar)
+corner(vEdit, 10)
+local vRun = mk("TextButton", {
+    Position = UDim2.new(0.5, 4, 0, 0), Size = UDim2.new(0.5, -4, 1, 0), BackgroundColor3 = BTNC, BackgroundTransparency = 0.2,
+    Text = "Execute", TextColor3 = TEXTC, Font = Enum.Font.GothamMedium, TextSize = 12, AutoButtonColor = true,
+}, vBar)
+corner(vRun, 10)
+
+-- single editable box used in Edit mode
+local editBox = mk("TextBox", {
+    LayoutOrder = 0, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
+    Text = "", TextColor3 = TEXTC, Font = Enum.Font.Code, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
+    TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = false, MultiLine = true, TextEditable = true,
+    ClearTextOnFocus = false, Visible = false,
+}, vScroll)
+local function currentText() return editMode and editBox.Text or rawText end
 local MAX_LINES = 3000
 local function setViewerText(text)
     rawText = text
     for _, c in ipairs(vScroll:GetChildren()) do
-        if not (c:IsA("UIListLayout") or c:IsA("UIPadding")) then c:Destroy() end
+        if not (c:IsA("UIListLayout") or c:IsA("UIPadding") or c == editBox) then c:Destroy() end
     end
     local lines = {}
     for line in (text:gsub("\r", "") .. "\n"):gmatch("(.-)\n") do lines[#lines + 1] = line end
@@ -498,25 +521,66 @@ end
 vBack.MouseButton1Click:Connect(closeViewer)
 vCopy.MouseButton1Click:Connect(function()
     if setclipboard then
-        setclipboard(rawText)
-        status("Copied " .. #rawText .. " characters")
+        local text = currentText()
+        setclipboard(text)
+        status("Copied " .. #text .. " characters")
     else
         status("No clipboard here, use Save")
     end
 end)
 vSave.MouseButton1Click:Connect(function()
-    local fname = "c1lown_raw_" .. rawTitle:gsub("[^%w_%-]", "_") .. ".txt"
-    if writefile and pcall(writefile, fname, rawText) then
+    local fname = "c1lown_raw_" .. rawTitle:gsub("[^%w_%-]", "_") .. (viewIsCode and ".lua" or ".txt")
+    if writefile and pcall(writefile, fname, currentText()) then
         status("Saved " .. fname)
     else
         status("Couldn't save (executor has no writefile)")
     end
 end)
 
-local function showRaw(titleText, producer)
+local function setEditMode(on)
+    if on == editMode then return end
+    if on then
+        editMode = true
+        editBox.Text = rawText
+        for _, c in ipairs(vScroll:GetChildren()) do
+            if c:IsA("TextBox") and c ~= editBox then c.Visible = false end
+            if c:IsA("TextLabel") then c.Visible = false end
+        end
+        editBox.Visible = true
+        vEdit.Text = "Done"
+    else
+        editMode = false
+        local text = editBox.Text
+        editBox.Visible = false
+        vEdit.Text = "Edit"
+        setViewerText(text)
+    end
+end
+vEdit.MouseButton1Click:Connect(function() setEditMode(not editMode) end)
+
+-- running code needs a second tap
+wireButton(vRun, "Execute", true, function()
+    if not loadstring then status("This executor has no loadstring") return end
+    local fn, err = loadstring(currentText())
+    if not fn then status("Compile error: " .. short(err, 120)) return end
+    task.spawn(function()
+        local ok, e = pcall(fn)
+        status(ok and "Executed" or ("Runtime error: " .. short(e, 120)))
+    end)
+end)
+
+local function showRaw(titleText, producer, isCode)
     viewToken += 1
     local token = viewToken
     rawTitle = titleText
+    viewIsCode = isCode and true or false
+    editMode = false
+    editBox.Visible = false
+    vEdit.Text = "Edit"
+    vBar.Visible = viewIsCode
+    local top = viewIsCode and 76 or 38
+    vScroll.Position = UDim2.fromOffset(0, top)
+    vScroll.Size = UDim2.new(1, 0, 1, -top)
     scroll.Visible = false
     tabBar.Visible = false
     viewer.Visible = true
@@ -716,7 +780,7 @@ local function buildGame()
                 rebuild(true)
             end },
             { text = "View", action = function()
-                showRaw(s.Name, function() return describeScript(s) end)
+                showRaw(s.Name, function() return describeScript(s) end, true)
             end },
         })
     end
@@ -830,9 +894,9 @@ local function buildView()
     mk("UIPadding", { PaddingLeft = UDim.new(0, 12), PaddingRight = UDim.new(0, 12) }, box)
 
     local rows = {}
-    local function addRow(name, subText, producer)
+    local function addRow(name, subText, producer, isCode)
         local row = makeRow(name, subText, {
-            { text = "View", action = function() showRaw(name, producer) end },
+            { text = "View", action = function() showRaw(name, producer, isCode) end },
         })
         rows[#rows + 1] = { row = row, key = (name .. " " .. subText):lower() }
     end
@@ -883,7 +947,7 @@ local function buildView()
             infoLabel("...and " .. (#list - 80) .. " more (list capped at 80).", 18)
             break
         end
-        addRow(sc.Name, shortPath(sc), function() return describeScript(sc) end)
+        addRow(sc.Name, shortPath(sc), function() return describeScript(sc) end, true)
     end
 
     -- executor connections
