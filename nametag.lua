@@ -63,6 +63,8 @@ local DEFAULT = {
     autoProfiles = false, -- create a template profile file for every player in the server (off: it floods the workspace)
     decor = false, -- decorative images on the tag (emo theme)
     zoomScale = 60, -- 0 = normal world size, 100 = same size on screen at any zoom
+    animLoop = true, -- Animations tab: loop the animation
+    animSpeed = 10, -- Animations tab: speed in tenths (10 = normal)
 }
 local cfg = {}
 for k, v in pairs(DEFAULT) do cfg[k] = v end
@@ -210,7 +212,7 @@ end
 -- profiles can change how a tag looks, never your private settings
 local BLOCKED = { menuKey = true, beacon = true, notify = true,
     showOthers = true, autoProfiles = true, hideForeign = true, hideDefault = true,
-    matchForeign = true, followForeign = true, enabled = true }
+    matchForeign = true, followForeign = true, enabled = true, animLoop = true, animSpeed = true }
 local function mergeProfile(dst, prof)
     for k, v in pairs(prof) do
         if DEFAULT[k] ~= nil and not BLOCKED[k] and type(v) == type(DEFAULT[k]) then dst[k] = v end
@@ -2112,6 +2114,61 @@ end)
 -- ====================================================================
 -- About / unload
 -- ====================================================================
+-- ====================================================================
+-- Animations tab: play an animation on YOUR character. Animations played on your
+-- own character replicate, so everyone in the server sees them.
+-- ====================================================================
+do
+    local page = newTab("Animations")
+    local A = { track = nil }
+    addLabel(page, "Play on your character")
+    local idBox = newBox(page, "Animation ID (number or rbxassetid://...)", 34)
+    addToggle(page, "Loop", "animLoop")
+    addSlider(page, "Speed (10 = normal)", "animSpeed", 1, 40)
+
+    function A.stop()
+        if A.track then
+            pcall(function() A.track:Stop(0.1) end)
+            A.track = nil
+        end
+    end
+
+    function A.play()
+        local id = idBox.Text:match("%d+")
+        if not id then status("Type an animation ID first") return end
+        local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
+        local animator = hum and hum:FindFirstChildOfClass("Animator")
+        if not animator then status("No character yet, try again in a moment") return end
+        A.stop()
+        local anim = Instance.new("Animation")
+        anim.AnimationId = "rbxassetid://" .. id
+        local ok, tr = pcall(function() return animator:LoadAnimation(anim) end)
+        if not ok or not tr then status("Couldn't load that animation") return end
+        tr.Looped = cfg.animLoop
+        tr.Priority = Enum.AnimationPriority.Action4
+        A.track = tr
+        pcall(function() tr:Play(0.1, 1, cfg.animSpeed / 10) end)
+        status("Loading animation " .. id .. "...")
+        task.delay(1.5, function()
+            if A.track ~= tr then return end
+            if tr.Length == 0 then
+                A.stop()
+                status("That animation wouldn't load (games only allow Roblox-made or their own animations)")
+            else
+                status("Playing " .. id .. " (others in the server see it too)")
+            end
+        end)
+    end
+
+    addButton(page, "Play animation", A.play)
+    addButton(page, "Stop animation", function() A.stop() status("Stopped") end)
+    local note = label(page, "Only animations the game allows will load (Roblox emotes and the game's own). Respawning stops it.", 12, Enum.Font.Gotham, SUB)
+    note.Size = UDim2.new(1, 0, 0, 48)
+    note.TextWrapped = true
+    note.TextYAlignment = Enum.TextYAlignment.Top
+    peerForeign.animStop = A.stop
+end
+
 local miscTab = newTab("About")
 addLabel(miscTab, "Your executor")
 local execLbl = label(miscTab, "Detected: " .. execName .. (execKey and "  (shared with other script users)" or "  (not in the known list, others see a plain tag)"), 12, Enum.Font.Gotham, TEXT)
@@ -2119,6 +2176,7 @@ execLbl.Size = UDim2.new(1, 0, 0, 34)
 execLbl.TextWrapped = true
 addLabel(miscTab, "Menu")
 local function unloadAll()
+    pcall(function() if peerForeign.animStop then peerForeign.animStop() end end)
     pcall(function() if editName then stopEditing() end end)
     pcall(stopBeacon)
     pcall(stopCopy)
