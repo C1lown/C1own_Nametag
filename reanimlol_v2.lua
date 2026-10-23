@@ -1,25 +1,7 @@
--- reanimlol v5: keyframe-only (Motor6Ds are unparented so other players see the animation)
--- Body reanimation driven purely by keyframes. No Roblox animation assets, IDs or AnimationTracks are
--- used: every clip is a list of timed poses (built in, recorded, or imported as JSON) that the engine
--- samples itself and writes to the rig's Motor6D.Transform values. Works on R6 and R15.
--- Enable the toggle (or press the hotkey) first. Saved data (favorites, imported clips, state picks,
--- settings, recordings) is written to the "Reanimlol" folder when your executor supports writefile.
---
--- Replication fixes in this build (so other players can see the animation):
---   * simulation radius is raised on start and every physics step (needs sethiddenproperty or setsimulationradius)
---   * the real HumanoidRootPart keeps normal density/mass (only the limbs are made massless), so the
---     assembly doesn't end up with ~zero mass
---   * network ownership of the real character's parts is checked every few seconds (isnetworkowner);
---     a warning in the console lists any parts you don't own
---
--- Import fixes from the previous build:
---   * keyframe files are detected by CONTENT (Lua tables with Time / CFrame.new vs JSON), not by extension
---   * .txt files are supported (a Lua export or JSON pose file saved as .txt loads fine)
---   * drop files in Reanimlol/keyframes/ (subfolders become sub-categories) and press "Reload folder"
---     on the Import tab to pick up new / edited / deleted files without rejoining
---   * "Load file" also tries .lua / .json / .txt when you type a name without an extension
---   * the invalid-data message now tells you how much text arrived (pasting very large files fails
---     because a text box can't hold them: use Load file instead)
+-- reanimlol v6: keyframe-only GUI + original body reanimation core
+-- Body reanimation core is the one from your message__14_ file (unchanged). The GUI, keyframe
+-- library, recorder and importer are from v4/v5. Saved data goes to the "Reanimlol" folder when your
+-- executor supports writefile.
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -43,20 +25,6 @@ local state = {
  animation={joints={},original_motor_c0s={}},
 }
 local api={set_arm_poles=function() end,stop_animation=function() end}
-
--- Raises the simulation radius so the server keeps giving this client physics ownership of the real
--- body parts. Without it, parts drift out of range and other players see them frozen or stuck.
-local function boostSimulation(lp)
-  pcall(function()
-    if type(sethiddenproperty) == "function" then
-      sethiddenproperty(lp, "SimulationRadius", 1e9)
-      sethiddenproperty(lp, "MaximumSimulationRadius", 1e9)
-    elseif type(setsimulationradius) == "function" then
-      setsimulationradius(1e9, 1e9)
-    end
-  end)
-end
-
 local function cloneCharacter(arg2)
   if typeof(arg2) ~= "Instance" then
     return ("bad argument #1 to 'clone_char' (Instance expected, got %s)"):format(typeof(arg2))
@@ -87,6 +55,8 @@ local function cloneCharacter(arg2)
 
   return clone
 end
+
+
 
 local function bodyJoint(object, model)
   local a, b
@@ -126,24 +96,14 @@ local function sourceObject(session, object)
         for _, property in ipairs({"C0", "C1", "Transform"}) do remember(session, object, property) end
       end
       object.Enabled = false
-      -- Disabling is client-only; actually unparenting the Motor6D is what the server sees as a broken weld.
-      if object:IsA("Motor6D") and not session.removedJoints[object] then
-        session.removedJoints[object] = object.Parent
-        object.Parent = nil
-      end
     end
   elseif object:IsA("BasePart") then
     for _, property in ipairs({"CanCollide", "Massless", "CustomPhysicalProperties", "Transparency", "Size"}) do
       remember(session, object, property)
     end
     session.parts[object] = true
-    object.CanCollide, object.Transparency = false, 1
-    -- Limbs are made weightless, but the root keeps normal mass/density so the real assembly doesn't
-    -- end up with almost no mass (the server may throttle or reject such an assembly).
-    if object ~= session.root then
-      object.Massless = true
-      object.CustomPhysicalProperties = PhysicalProperties.new(0.001, 0, 0, 0, 0)
-    end
+    object.CanCollide, object.Massless, object.Transparency = false, true, 1
+    object.CustomPhysicalProperties = PhysicalProperties.new(0.001, 0, 0, 0, 0)
   elseif object:IsA("Decal") then
     remember(session, object, "Transparency")
     object.Transparency = 1
@@ -187,13 +147,6 @@ stopReanimation = function()
   release(function() api.stop_animation() end)
   if session then
     for _, object in ipairs(session.owned) do release(function() object:Destroy() end) end
-    -- Put removed Motor6Ds back (disabled until their saved values are restored below).
-    for joint, parent in pairs(session.removedJoints) do
-      release(function()
-        joint.Enabled = false
-        joint.Parent = parent
-      end)
-    end
     -- Rebuild the body before restoring joints, collisions, and RequiresNeck.
     if session.character.Parent and session.player.Character == session.character and session.humanoid.Health > 0 then
       release(function()
@@ -290,12 +243,11 @@ local function startReanimation()
       and humanoid.Health > 0 and not root.Anchored, "Character changed; try again.")
     local session = {
       player = player, character = character, humanoid = humanoid, root = root,
-      saved = {}, owned = {}, links = {}, parts = {}, jointCandidates = {}, cameras = {}, removedJoints = {},
-      controls = controls, focused = true, lastOwnerCheck = 0,
+      saved = {}, owned = {}, links = {}, parts = {}, jointCandidates = {}, cameras = {},
+      controls = controls, focused = true,
     }
     state.rig.session = session
     state.real_chars[player] = character
-    boostSimulation(player)
     local copy = cloneCharacter(character)
     assert(typeof(copy) == "Instance", tostring(copy))
     session.copy = copy
@@ -386,24 +338,6 @@ local function startReanimation()
         end
       end
     end
-    -- Every few seconds, warn about real body parts this client doesn't have network ownership of.
-    -- Parts you don't own are not replicated, so other players can't see them move.
-    local function checkOwnership()
-      if type(isnetworkowner) ~= "function" then return end
-      local now = os.clock()
-      if now - session.lastOwnerCheck < 3 then return end
-      session.lastOwnerCheck = now
-      local missing = {}
-      for _, link in ipairs(session.links) do
-        if link.part.Parent then
-          local okOwner, owned = pcall(isnetworkowner, link.part)
-          if okOwner and not owned then missing[#missing + 1] = link.part.Name end
-        end
-      end
-      if #missing > 0 then
-        warn("reanimlol: not network owner of: " .. table.concat(missing, ", ") .. " (others can't see these parts move)")
-      end
-    end
     listen("source_added", character.DescendantAdded, function(object) sourceObject(session, object) end)
     listen("source_removed", character.DescendantRemoving, function(object)
       if object == humanoid or object == root then stopReanimation(); return end
@@ -421,18 +355,14 @@ local function startReanimation()
     end)
     listen("step", state.services.run_service.PreSimulation, function()
       if not validRig() or humanoid.Health <= 0 or copyHumanoid.Health <= 0 then stopReanimation(); return end
-      boostSimulation(player)
-      checkOwnership()
       humanoid.RequiresNeck, humanoid.BreakJointsOnDeath, humanoid.PlatformStand = false, false, true
       for joint in pairs(session.jointCandidates) do
         if joint:IsDescendantOf(character) then
           if bodyJoint(joint, character) then sourceObject(session, joint) end
         else
-          if not session.removedJoints[joint] then
-            local saved = session.saved[joint]
-            if saved and saved.Enabled and joint.Parent then joint.Enabled = saved.Enabled.value end
-            session.jointCandidates[joint] = nil
-          end
+          local saved = session.saved[joint]
+          if saved and saved.Enabled and joint.Parent then joint.Enabled = saved.Enabled.value end
+          session.jointCandidates[joint] = nil
         end
       end
       for part in pairs(session.parts) do if part:IsDescendantOf(character) then part.CanCollide = false end end
