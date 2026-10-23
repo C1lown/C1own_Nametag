@@ -1,7 +1,7 @@
--- reanimlol v8: keyframe GUI on top of Krypton Reanimate (hat-based, replicates to other players)
--- The old clone-and-align core is replaced by the Krypton module that Open FE uses. It is downloaded
--- and run when you flip the toggle. The GUI's keyframe engine then animates the rig Krypton gives back.
--- Needs an executor with loadstring + game:HttpGet. Fling is always off here.
+-- reanimlol v9: v7 GUI + default movement anims, with the replication fixes (Motor6Ds unparented, sim radius, ownership check)
+-- Body reanimation core is the one from your message__14_ file (unchanged). The GUI, keyframe
+-- library, recorder and importer are from v4/v5. Saved data goes to the "Reanimlol" folder when your
+-- executor supports writefile.
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -17,108 +17,438 @@ if type(shared.ReanimlolCleanup) == "function" then pcall(shared.ReanimlolCleanu
 ----------------------------------------------------------------------
 -- CORE: body reanimation
 ----------------------------------------------------------------------
-local KRYPTON_URL = "https://raw.githubusercontent.com/Blukezz/MessageToSelf-DontDeleteMe/refs/heads/main/Module.luau"
--- Overrides: set getgenv().ReanimlolConfig = {HatPreset = "Free", WaitTime = 0.5, ...} before running.
-local KRYPTON_CONFIG = {
-  ReturnOnDeath = true, Flinging = false, PresetFling = false, Animations = false, WaitTime = 0.3,
-  TeleportOffsetRadius = 20, NoCollisions = true, AntiVoiding = true, SetSimulationRadius = true,
-  DisableCharacterScripts = true, AccessoryFallbackDefaults = true, OverlayFakeCharacter = false,
-  HatPreset = "Default", UseCustomHats = false,
-}
-
 local bodyReanim = (function()
-local R = {rig = nil, api = nil, starting = false, rev = 0, conns = {}, callback = nil}
+local state = {
+ services={players=game:GetService("Players"),workspace=game:GetService("Workspace"),
+ run_service=game:GetService("RunService"),user_input_service=game:GetService("UserInputService")},
+ flags={reanimated=false},rig={revision=0,starting=false},clones={},real_chars={},connections={},callbacks={},
+ animation={joints={},original_motor_c0s={}},
+}
+local api={set_arm_poles=function() end,stop_animation=function() end}
 
-local function disconnectAll()
-  for i = #R.conns, 1, -1 do pcall(function() R.conns[i]:Disconnect() end); R.conns[i] = nil end
+-- Raises the simulation radius so the server keeps giving this client physics ownership of the real
+-- body parts. Without it, parts drift out of range and other players see them frozen or stuck.
+local function boostSimulation(lp)
+  pcall(function()
+    if type(sethiddenproperty) == "function" then
+      sethiddenproperty(lp, "SimulationRadius", 1e9)
+      sethiddenproperty(lp, "MaximumSimulationRadius", 1e9)
+    elseif type(setsimulationradius) == "function" then
+      setsimulationradius(1e9, 1e9)
+    end
+  end)
 end
 
--- Called whenever the Krypton reanimation ends (cancel event, rig removed, or Stop)
-local function finish()
-  local had = R.rig ~= nil
-  R.rig, R.api = nil, nil
-  disconnectAll()
-  if had and R.callback then pcall(R.callback) end
+local function cloneCharacter(arg2)
+  if typeof(arg2) ~= "Instance" then
+    return ("bad argument #1 to 'clone_char' (Instance expected, got %s)"):format(typeof(arg2))
+  end
+  local changed = {}
+  local ok, clone = pcall(function()
+    local objects = arg2:GetDescendants()
+    table.insert(objects, arg2)
+    for _, object in ipairs(objects) do
+      if not object.Archivable then table.insert(changed, object); object.Archivable = true end
+    end
+    return arg2:Clone()
+  end)
+  for _, object in ipairs(changed) do pcall(function() object.Archivable = false end) end
+  if not ok or not clone then return "Character clone failed." end
+  for _, descendant in ipairs(clone:GetDescendants()) do
+    if descendant:IsA("LuaSourceContainer") then descendant:Destroy() end
+  end
+  clone.Name = "ReanimlolBody"
+  local humanoid = clone:FindFirstChildOfClass("Humanoid")
+  if not humanoid then clone:Destroy(); return "Cloned character has no humanoid." end
+  humanoid.RequiresNeck = false
+  humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+
+  if clone:FindFirstChildWhichIsA("ForceField") then
+    clone:FindFirstChildWhichIsA("ForceField"):Destroy()
+  end
+
+  return clone
 end
 
-local function validRig(rig)
-  return typeof(rig) == "Instance" and rig:IsDescendantOf(game)
-    and rig:FindFirstChildOfClass("Humanoid") and rig:FindFirstChild("HumanoidRootPart")
+local function bodyJoint(object, model)
+  local a, b
+  if object:IsA("JointInstance") or object:IsA("WeldConstraint") then
+    a, b = object.Part0, object.Part1
+  elseif object:IsA("Constraint") and not object:IsA("NoCollisionConstraint") then
+    local ok, first, second = pcall(function() return object.Attachment0, object.Attachment1 end)
+    if ok then
+      a = first and first:FindFirstAncestorOfClass("BasePart")
+      b = second and second:FindFirstAncestorOfClass("BasePart")
+    end
+  end
+  return a and b and (a ~= b or object:IsA("Motor6D")) and a.Parent == model and b.Parent == model
+end
+
+local function remember(session, object, property)
+  local properties = session.saved[object]
+  if not properties then properties = {}; session.saved[object] = properties end
+  if not properties[property] then properties[property] = {value = object[property]} end
+end
+
+local function own(session, className, parent, properties)
+  local object = Instance.new(className)
+  table.insert(session.owned, object)
+  for property, value in pairs(properties) do object[property] = value end
+  object.Parent = parent
+  return object
+end
+
+local function sourceObject(session, object)
+  if object:FindFirstAncestorOfClass("Tool") then return end
+  if object:IsA("JointInstance") or object:IsA("WeldConstraint") or object:IsA("Constraint") then
+    session.jointCandidates[object] = true
+    if bodyJoint(object, session.character) then
+      remember(session, object, "Enabled")
+      if object:IsA("Motor6D") then
+        for _, property in ipairs({"C0", "C1", "Transform"}) do remember(session, object, property) end
+      end
+      object.Enabled = false
+      -- Disabling is client-only; actually unparenting the Motor6D is what the server sees as a broken weld.
+      if object:IsA("Motor6D") and not session.removedJoints[object] then
+        session.removedJoints[object] = object.Parent
+        object.Parent = nil
+      end
+    end
+  elseif object:IsA("BasePart") then
+    for _, property in ipairs({"CanCollide", "Massless", "CustomPhysicalProperties", "Transparency", "Size"}) do
+      remember(session, object, property)
+    end
+    session.parts[object] = true
+    object.CanCollide, object.Transparency = false, 1
+    -- Limbs are made weightless, but the root keeps normal mass/density so the real assembly doesn't
+    -- end up with almost no mass (the server may throttle or reject such an assembly).
+    if object ~= session.root then
+      object.Massless = true
+      object.CustomPhysicalProperties = PhysicalProperties.new(0.001, 0, 0, 0, 0)
+    end
+  elseif object:IsA("Decal") then
+    remember(session, object, "Transparency")
+    object.Transparency = 1
+  end
+end
+
+local function setSessionCamera(session)
+  local camera = state.services.workspace.CurrentCamera
+  if camera and camera.CameraSubject ~= session.copyHumanoid then
+    if not session.cameras[camera] then session.cameras[camera] = {value = camera.CameraSubject} end
+    camera.CameraSubject = session.copyHumanoid
+  end
+end
+
+local function syncMovement(session)
+  for _, property in ipairs({"WalkSpeed", "JumpPower", "JumpHeight", "UseJumpPower", "HipHeight", "MaxSlopeAngle", "AutoJumpEnabled", "AutoRotate"}) do
+    if session.copyHumanoid[property] ~= session.humanoid[property] then
+      session.copyHumanoid[property] = session.humanoid[property]
+    end
+  end
+end
+
+local stopReanimation
+stopReanimation = function()
+  state.rig.revision += 1
+  state.rig.starting = false
+  local session = state.rig.session
+  state.rig.session = nil
+  local wasActive = state.flags.reanimated
+  state.flags.reanimated = false
+  local errors = {}
+  local function release(callback)
+    local ok, message = pcall(callback)
+    if not ok then table.insert(errors, tostring(message)) end
+  end
+  for key, connection in pairs(state.connections) do
+    state.connections[key] = nil
+    release(function() connection:Disconnect() end)
+  end
+  release(function() api.set_arm_poles(false) end)
+  release(function() api.stop_animation() end)
+  if session then
+    for _, object in ipairs(session.owned) do release(function() object:Destroy() end) end
+    -- Put removed Motor6Ds back (disabled until their saved values are restored below).
+    for joint, parent in pairs(session.removedJoints) do
+      release(function()
+        joint.Enabled = false
+        joint.Parent = parent
+      end)
+    end
+    -- Rebuild the body before restoring joints, collisions, and RequiresNeck.
+    if session.character.Parent and session.player.Character == session.character and session.humanoid.Health > 0 then
+      release(function()
+        local frame = session.copyRoot and session.copyRoot.Parent and session.copyRoot.CFrame or session.root.CFrame
+        local frames = {[session.root] = frame}
+        for _ = 1, 20 do
+          local changed = false
+          for joint, properties in pairs(session.saved) do
+            if properties.C0 and joint.Parent and joint.Part0 and joint.Part1 and frames[joint.Part0] and not frames[joint.Part1] then
+              frames[joint.Part1] = frames[joint.Part0] * properties.C0.value * properties.Transform.value * properties.C1.value:Inverse()
+              changed = true
+            end
+          end
+          if not changed then break end
+        end
+        for _, link in ipairs(session.links) do
+          if link.part.Parent then
+            link.part.CFrame = frames[link.part] or link.base.CFrame
+            link.part.AssemblyLinearVelocity, link.part.AssemblyAngularVelocity = Vector3.zero, Vector3.zero
+          end
+        end
+      end)
+    end
+    for object, properties in pairs(session.saved) do
+      if object ~= session.humanoid then
+        for property, saved in pairs(properties) do release(function() object[property] = saved.value end) end
+      end
+    end
+    local humanoidProperties = session.saved[session.humanoid] or {}
+    for property, saved in pairs(humanoidProperties) do
+      if property ~= "RequiresNeck" and property ~= "PlatformStand" then
+        release(function() session.humanoid[property] = saved.value end)
+      end
+    end
+    for _, property in ipairs({"RequiresNeck", "PlatformStand"}) do
+      local saved = humanoidProperties[property]
+      if saved then release(function() session.humanoid[property] = saved.value end) end
+    end
+    for camera, saved in pairs(session.cameras) do
+      release(function()
+        if camera.CameraSubject == session.copyHumanoid then camera.CameraSubject = saved.value end
+      end)
+    end
+    if session.copy then release(function() session.copy:Destroy() end) end
+    state.clones[session.player], state.real_chars[session.player] = nil, nil
+    if wasActive and session.humanoid.Parent and session.humanoid.Health > 0 and not session.humanoid.PlatformStand then
+      release(function() session.humanoid:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+    end
+  end
+  state.animation.body, state.animation.ac_joint_map = nil, nil
+  table.clear(state.animation.joints)
+  table.clear(state.animation.original_motor_c0s)
+  if wasActive and state.callbacks.on_deactivate then release(state.callbacks.on_deactivate) end
+  if #errors > 0 then return "Stopped with cleanup errors: " .. table.concat(errors, "; ") end
 end
 
 local function startReanimation()
-  if R.rig then return end
-  if R.starting then return "Reanim is starting." end
-  if type(loadstring) ~= "function" then return "Your executor has no loadstring." end
-  R.rev += 1
-  local rev = R.rev
-  R.starting = true
-  local ok, err = pcall(function()
-    local cfg = {}
-    for k, v in pairs(KRYPTON_CONFIG) do cfg[k] = v end
-    if type(shared.ReanimlolConfig) == "table" then
-      for k, v in pairs(shared.ReanimlolConfig) do cfg[k] = v end
-    end
-    cfg.Flinging, cfg.PresetFling = false, false -- this GUI never flings
-    shared.Configuration = cfg
-    shared.OpenFE = type(shared.OpenFE) == "table" and shared.OpenFE or {Music = true, HidePart1 = true}
-    shared.KadeAPI = nil -- so a stale API from an earlier run isn't mistaken for the new one
-    local fetched, source = pcall(function() return game:HttpGet(KRYPTON_URL) end)
-    assert(fetched and type(source) == "string" and #source > 0, "Couldn't download the reanimate module.")
-    local fn, compileError = loadstring(source)
-    assert(fn, "Reanimate module failed to compile: " .. tostring(compileError))
-    task.spawn(fn)
-    local deadline, api, rig = os.clock() + 25, nil, nil
+  if state.flags.reanimated then return end
+  if state.rig.starting then return "Reanim is starting." end
+  state.rig.revision += 1
+  state.rig.starting = true
+  local revision = state.rig.revision
+  local function current() return revision == state.rig.revision end
+  local ok, message = pcall(function()
+    local player = state.services.players.LocalPlayer
+    assert(player, "Local player is unavailable.")
+    local character, humanoid, root, pending
+    local deadline = os.clock() + 5
     repeat
-      task.wait(0.1)
-      assert(rev == R.rev, "Start cancelled.")
-      api = shared.KadeAPI
-      if api then
-        local got, value = pcall(function() return api:GetCharacter() end)
-        if got and validRig(value) then rig = value end
-      end
-    until rig or os.clock() > deadline
-    assert(rig, "Reanimate didn't start (no rig after 25s).")
-    R.rig, R.api = rig, api
-    local gotEvent, event = pcall(function() return api:GetCancelEvent() end)
-    if gotEvent and typeof(event) == "Instance" and event:IsA("BindableEvent") then
-      R.conns[#R.conns + 1] = event.Event:Connect(finish)
+      assert(current(), "Start cancelled.")
+      character = player.Character
+      if pending and pending ~= character then error("Character changed; try again.", 0) end
+      pending = character
+      humanoid = character and character:FindFirstChildOfClass("Humanoid")
+      root = character and character:FindFirstChild("HumanoidRootPart")
+      if humanoid and root then break end
+      assert(os.clock() < deadline, "Wait for your character to respawn.")
+      task.wait(0.05)
+    until false
+    assert(humanoid.Health > 0 and not root.Anchored, "Character is dead or anchored.")
+    local mainFollower = root:FindFirstChild("rn_ap")
+    assert(not (mainFollower and mainFollower:IsA("AlignPosition") and mainFollower.Enabled), "Turn off Main reanim before enabling Reanimlol.")
+    -- This is the player's installed local controls module, not an asset or URL.
+    local scripts = player:FindFirstChild("PlayerScripts")
+    local module = scripts and scripts:FindFirstChild("PlayerModule")
+    local controls
+    if module and module:IsA("ModuleScript") then
+      local loaded, value = pcall(function() return require(module):GetControls() end)
+      local valid = loaded and value and pcall(function() assert(type(value.GetMoveVector) == "function") end)
+      if valid then controls = value end
     end
-    R.conns[#R.conns + 1] = rig.AncestryChanged:Connect(function()
-      if not rig:IsDescendantOf(game) then finish() end
-    end)
-  end)
-  R.starting = false
-  if not ok then return tostring(err):gsub("^.-:%d+: ", "") end
-end
-
-local function stopReanimation()
-  R.rev += 1
-  R.starting = false
-  if R.rig then
-    local api, stopped = R.api, false
-    if type(api) == "table" then
-      for _, name in ipairs({"Stop", "Cancel", "Cleanup", "Destroy"}) do
-        local okIndex, f = pcall(function() return api[name] end)
-        if okIndex and type(f) == "function" then pcall(f, api); stopped = true; break end
+    assert(current(), "Start cancelled.")
+    assert(player.Character == character and character.Parent and humanoid.Parent == character and root.Parent == character
+      and humanoid.Health > 0 and not root.Anchored, "Character changed; try again.")
+    local session = {
+      player = player, character = character, humanoid = humanoid, root = root,
+      saved = {}, owned = {}, links = {}, parts = {}, jointCandidates = {}, cameras = {}, removedJoints = {},
+      controls = controls, focused = true, lastOwnerCheck = 0,
+    }
+    state.rig.session = session
+    state.real_chars[player] = character
+    boostSimulation(player)
+    local copy = cloneCharacter(character)
+    assert(typeof(copy) == "Instance", tostring(copy))
+    session.copy = copy
+    state.clones[player] = copy
+    local copyHumanoid, copyRoot = copy:FindFirstChildOfClass("Humanoid"), copy:FindFirstChild("HumanoidRootPart")
+    assert(copyHumanoid and copyRoot, "Cloned character rig is incomplete.")
+    session.copyHumanoid, session.copyRoot = copyHumanoid, copyRoot
+    copyHumanoid.RequiresNeck, copyHumanoid.BreakJointsOnDeath = false, false
+    copyHumanoid.PlatformStand, copyHumanoid.Sit = false, false
+    pcall(function() copyHumanoid.EvaluateStateMachine = true end)
+    local hasMotors = false
+    for _, object in ipairs(copy:GetDescendants()) do if object:IsA("Motor6D") then hasMotors = true; break end end
+    assert(hasMotors, "This rig needs Motor6D joints.")
+    local forceClasses = {BodyForce = true, BodyVelocity = true, BodyGyro = true, VectorForce = true, LinearVelocity = true, AngularVelocity = true}
+    for _, object in ipairs(copy:GetDescendants()) do
+      if object:IsA("LuaSourceContainer") or object:IsA("Tool") or forceClasses[object.ClassName] then
+        object:Destroy()
+      elseif object:IsA("BillboardGui") then object.Enabled = false
+      elseif object:IsA("BasePart") then object.LocalTransparencyModifier = 0
+      elseif bodyJoint(object, copy) then
+        object.Enabled = object:IsA("Motor6D") or not hasMotors and object:IsA("AnimationConstraint")
       end
     end
-    if not stopped then
-      -- no stop function on the API: killing the real character ends hat reanimates
-      pcall(function()
-        local character = player.Character
-        local h = character and character:FindFirstChildOfClass("Humanoid")
-        if h then h.Health = 0 end
+    syncMovement(session)
+    copy.Parent = state.services.workspace
+    copyRoot.AssemblyLinearVelocity, copyRoot.AssemblyAngularVelocity = root.AssemblyLinearVelocity, Vector3.zero
+    copyHumanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+    for _, property in ipairs({"RequiresNeck", "BreakJointsOnDeath", "PlatformStand", "DisplayDistanceType"}) do remember(session, humanoid, property) end
+    local evaluated = pcall(function() remember(session, humanoid, "EvaluateStateMachine") end)
+    humanoid.RequiresNeck, humanoid.BreakJointsOnDeath, humanoid.PlatformStand = false, false, true
+    humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+    if evaluated then humanoid.EvaluateStateMachine = false end
+    local animate = character:FindFirstChild("Animate")
+    if animate and animate:IsA("LocalScript") then remember(session, animate, "Disabled"); animate.Disabled = true end
+    local animator = humanoid:FindFirstChildOfClass("Animator")
+    if animator then for _, track in ipairs(animator:GetPlayingAnimationTracks()) do track:Stop(0) end end
+    for _, object in ipairs(character:GetDescendants()) do sourceObject(session, object) end
+    for _, part in ipairs(character:GetChildren()) do
+      local base = copy:FindFirstChild(part.Name)
+      if part:IsA("BasePart") and base and base:IsA("BasePart") then
+        local a0 = own(session, "Attachment", part, {Name = "ReanimlolFollower0"})
+        local a1 = own(session, "Attachment", base, {Name = "ReanimlolFollower1"})
+        own(session, "AlignPosition", part, {
+          Name = "ReanimlolPosition", Attachment0 = a0, Attachment1 = a1,
+          RigidityEnabled = true, ReactionForceEnabled = false,
+        })
+        own(session, "AlignOrientation", part, {
+          Name = "ReanimlolOrientation", Attachment0 = a0, Attachment1 = a1,
+          RigidityEnabled = true, ReactionTorqueEnabled = false,
+        })
+        table.insert(session.links, {part = part, base = base})
+      end
+    end
+    state.animation.body = copy
+    table.clear(state.animation.joints)
+    table.clear(state.animation.original_motor_c0s)
+    for _, object in ipairs(copy:GetDescendants()) do
+      if object:IsA("Motor6D") and object.Part1 then
+        state.animation.joints[object.Part1.Name] = object
+        state.animation.original_motor_c0s[object] = object.C0
+      end
+    end
+    state.animation.ac_joint_map = nil
+    state.flags.reanimated = true
+    local function listen(name, signal, callback)
+      state.connections[name] = signal:Connect(function(...)
+        if not current() or state.rig.session ~= session then return end
+        local handled, problem = pcall(callback, ...)
+        if not handled and current() then
+          stopReanimation()
+          warn("Reanimlol reanim: " .. tostring(problem))
+        end
       end)
     end
-  end
-  finish()
+    local function validRig()
+      return player.Character == character and character.Parent and copy.Parent
+        and humanoid.Parent == character and root.Parent == character
+        and copyHumanoid.Parent == copy and copyRoot.Parent == copy
+        and character:FindFirstChild("HumanoidRootPart") == root and not root.Anchored
+    end
+    local function driveFollowers()
+      for _, link in ipairs(session.links) do
+        if link.part.Parent and link.base.Parent then
+          link.part.Size = link.base.Size
+          link.part.CFrame = link.base.CFrame
+          link.part.AssemblyLinearVelocity = copyRoot.AssemblyLinearVelocity
+          link.part.AssemblyAngularVelocity = Vector3.zero
+        end
+      end
+    end
+    -- Every few seconds, warn about real body parts this client doesn't have network ownership of.
+    -- Parts you don't own are not replicated, so other players can't see them move.
+    local function checkOwnership()
+      if type(isnetworkowner) ~= "function" then return end
+      local now = os.clock()
+      if now - session.lastOwnerCheck < 3 then return end
+      session.lastOwnerCheck = now
+      local missing = {}
+      for _, link in ipairs(session.links) do
+        if link.part.Parent then
+          local okOwner, owned = pcall(isnetworkowner, link.part)
+          if okOwner and not owned then missing[#missing + 1] = link.part.Name end
+        end
+      end
+      if #missing > 0 then
+        warn("reanimlol: not network owner of: " .. table.concat(missing, ", ") .. " (others can't see these parts move)")
+      end
+    end
+    listen("source_added", character.DescendantAdded, function(object) sourceObject(session, object) end)
+    listen("source_removed", character.DescendantRemoving, function(object)
+      if object == humanoid or object == root then stopReanimation(); return end
+      for _, link in ipairs(session.links) do if object == link.part then stopReanimation(); return end end
+    end)
+    listen("died", humanoid.Died, stopReanimation)
+    listen("clone_died", copyHumanoid.Died, stopReanimation)
+    listen("character_removing", player.CharacterRemoving, function(model) if model == character then stopReanimation() end end)
+    listen("character_added", player.CharacterAdded, function(model) if model ~= character then stopReanimation() end end)
+    listen("camera", state.services.workspace:GetPropertyChangedSignal("CurrentCamera"), function() setSessionCamera(session) end)
+    listen("focus", state.services.user_input_service.WindowFocused, function() session.focused = true end)
+    listen("blur", state.services.user_input_service.WindowFocusReleased, function() session.focused = false; copyHumanoid:Move(Vector3.zero) end)
+    listen("jump", state.services.user_input_service.JumpRequest, function()
+      if session.focused and not state.services.user_input_service:GetFocusedTextBox() then copyHumanoid.Jump = true end
+    end)
+    listen("step", state.services.run_service.PreSimulation, function()
+      if not validRig() or humanoid.Health <= 0 or copyHumanoid.Health <= 0 then stopReanimation(); return end
+      boostSimulation(player)
+      checkOwnership()
+      humanoid.RequiresNeck, humanoid.BreakJointsOnDeath, humanoid.PlatformStand = false, false, true
+      for joint in pairs(session.jointCandidates) do
+        if joint:IsDescendantOf(character) then
+          if bodyJoint(joint, character) then sourceObject(session, joint) end
+        else
+          if not session.removedJoints[joint] then
+            local saved = session.saved[joint]
+            if saved and saved.Enabled and joint.Parent then joint.Enabled = saved.Enabled.value end
+            session.jointCandidates[joint] = nil
+          end
+        end
+      end
+      for part in pairs(session.parts) do if part:IsDescendantOf(character) then part.CanCollide = false end end
+      syncMovement(session)
+      local move, relative = Vector3.zero, false
+      if session.focused and not state.services.user_input_service:GetFocusedTextBox() then
+        if session.controls then
+          local got, value = pcall(function() return session.controls:GetMoveVector() end)
+          if got and typeof(value) == "Vector3" then move, relative = value, true else session.controls = nil end
+        end
+        if not session.controls then move = humanoid.MoveDirection or Vector3.zero end
+      end
+      if move.Magnitude ~= move.Magnitude or move.Magnitude == math.huge then move = Vector3.zero end
+      if move.Magnitude > 1 then move = move.Unit end
+      copyHumanoid:Move(move, relative)
+      driveFollowers()
+    end)
+    if state.services.run_service.PostSimulation then
+      listen("post_step", state.services.run_service.PostSimulation, function()
+        if not validRig() then stopReanimation(); return end
+        driveFollowers()
+      end)
+    end
+    setSessionCamera(session)
+  end)
+  if not current() then return "Start cancelled." end
+  state.rig.starting = false
+  if not ok then stopReanimation(); return tostring(message) end
 end
 
 return {
- Start = startReanimation, Stop = stopReanimation,
- Get = function() return R.rig and validRig(R.rig) and R.rig or nil end,
- OnStopped = function(callback) R.callback = callback end,
+ Start=startReanimation, Stop=stopReanimation,
+ Get=function() local s=state.rig.session; return state.flags.reanimated and s and s.copy end,
+ OnStopped=function(callback) state.callbacks.on_deactivate=callback end,
 }
 end)()
 
