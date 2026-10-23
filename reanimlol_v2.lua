@@ -720,7 +720,27 @@ add("Dances", "Classic", "Spin", {duration = 1.2, loop = true, keys = {
     K(1.2, {Hips = {0, 360, 0}, RArm = {0, 0, 70}, LArm = {0, 0, -70}}, "Linear"),
 }})
 
--- No built-in state animations: states stay empty until you assign a clip
+-- Fallback movement animations, used only for a state you haven't assigned a clip to (the cloned body has
+-- no Animate script, so without these it slides around stiff). Assigning a clip overrides them.
+local function gait(duration, swing, knee, arm)
+    return cycle(duration, 12, function(a)
+        local c = math.cos(a)
+        return {RLeg = {swing * math.sin(a), 0, 0}, LLeg = {-swing * math.sin(a), 0, 0},
+            RShin = {-knee * math.max(0, c), 0, 0}, LShin = {-knee * math.max(0, -c), 0, 0},
+            RArm = {-arm * math.sin(a), 0, 0}, LArm = {arm * math.sin(a), 0, 0},
+            Hips = {0, 0, 0, 0, 0.06 * math.abs(math.sin(a)), 0}}
+    end)
+end
+local DEFAULT_STATES = {
+    walk = {def = gait(0.8, 35, 40, 30)},
+    run = {def = gait(0.5, 55, 70, 55)},
+    jump = {def = {duration = 0.4, loop = true, keys = {
+        K(0, {RArm = {0, 0, 140}, LArm = {0, 0, -140}, RLeg = {-10, 0, 0}, LLeg = {10, 0, 0}}),
+        K(0.4, {RArm = {0, 0, 140}, LArm = {0, 0, -140}, RLeg = {-10, 0, 0}, LLeg = {10, 0, 0}})}}},
+    fall = {def = {duration = 0.4, loop = true, keys = {
+        K(0, {RArm = {0, 0, 100}, LArm = {0, 0, -100}, RLeg = {8, 0, 6}, LLeg = {-8, 0, -6}}),
+        K(0.4, {RArm = {0, 0, 100}, LArm = {0, 0, -100}, RLeg = {8, 0, 6}, LLeg = {-8, 0, -6}})}}},
+}
 
 -- Entries --------------------------------------------------------------
 local recorded = {} -- recorded entries {key,name,cat,sub,recorded=true,clip=,path=}
@@ -985,7 +1005,7 @@ local function refreshState(s)
     engine.gen[s] = (engine.gen[s] or 0) + 1
     local gen, copy = engine.gen[s], engine.copy
     task.spawn(function()
-        local anim = resolveAnim(data.states[s])
+        local anim = resolveAnim(data.states[s] or DEFAULT_STATES[s])
         if not usable(anim) then
             if data.states[s] and not destroyed then setStatus(cap(s) .. " anim doesn't fit this rig") end
             anim = nil
