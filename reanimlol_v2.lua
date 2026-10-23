@@ -1,9 +1,9 @@
--- reanimlol v10: v7 GUI + ragdoll-remote reanimation core (the game's own ragdoll remote breaks your joints on the server)
+-- reanimlol v10.1: v7 GUI + ragdoll-remote reanimation core (the game's own ragdoll remote breaks your joints on the server)
 -- Body reanimation core is the one from your message__14_ file (unchanged). The GUI, keyframe
 -- library, recorder and importer are from v4/v5. Saved data goes to the "Reanimlol" folder when your
 -- executor supports writefile.
 
-warn("=== reanimlol V10 (ragdoll remote) loaded ===")
+warn("=== reanimlol V10.1 (ragdoll remote + speed keys) loaded ===")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
@@ -298,6 +298,7 @@ end
 local settings = {
     speed = 1, loop = true, stopOnMove = true, walkSync = true, blend = 0.15, recordRate = 20,
     noclip = true, keyToggle = "RightControl", keyGui = "RightShift", keyStop = "X",
+    keySpeedDown = "Minus", keySpeedUp = "Equals", keySpeedReset = "Zero",
 }
 local data = {favorites = {}, custom = {}, states = {}, binds = {}, settings = settings}
 
@@ -1744,7 +1745,15 @@ end)
 bindRow("Toggle reanim key", "keyToggle", 136)
 bindRow("Hide / show GUI key", "keyGui", 170)
 bindRow("Stop emote key", "keyStop", 204)
-button(tabG, "Reset saved data", 0, 246, 356, 30, function()
+label(tabG, "Speed keys: slower / faster / reset  (Esc cancels a rebind)", 4, 238, 350, 14, {TextSize = 10, TextColor3 = C.dim})
+for i, key in ipairs({"keySpeedDown", "keySpeedUp", "keySpeedReset"}) do
+    local b = button(tabG, settings[key], (i - 1) * 122, 254, 112, 26, function()
+        ui.binding = key
+        ui.bindBtn[key].Text = "press key..."
+    end)
+    ui.bindBtn[key] = b
+end
+button(tabG, "Reset saved data", 0, 286, 356, 28, function()
     data.favorites, data.custom, data.states, data.binds = {}, {}, {}, {}
     saveData()
     ui.main, ui.sub, ui.selected = "All", "All", nil
@@ -1752,17 +1761,23 @@ button(tabG, "Reset saved data", 0, 246, 356, 30, function()
     for _, s in ipairs(STATES) do refreshState(s) end
     setStatus("Data reset")
 end)
-label(tabG, "Esc cancels a rebind. Hotkeys are ignored while typing in a text box. Emote binds: click the ⌨ button on an emote row, then press a key (Backspace clears).", 4, 284, 350, 30,
-    {TextSize = 10, TextColor3 = C.dim, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top})
 
 -- Footer (speed / stop / loop) ----------------------------------------
 label(panel, "Speed", 14, 398, 46, 22, {TextColor3 = C.dim, TextSize = 12})
 local speedVal = label(panel, string.format("%.2fx", settings.speed), 318, 398, 52, 22, {TextColor3 = C.dim, TextSize = 12})
-slider(panel, 62, 402, 250, 0.1, 3, settings.speed, function(v)
+local speedSlider = slider(panel, 62, 402, 250, 0.1, 3, settings.speed, function(v)
     settings.speed = math.floor(v * 20 + 0.5) / 20
     speedVal.Text = string.format("%.2fx", settings.speed)
     saveSoon()
 end)
+local function setSpeed(v)
+    v = math.clamp(math.floor(v * 20 + 0.5) / 20, 0.1, 3)
+    settings.speed = v
+    speedSlider.set(v, false)
+    speedVal.Text = string.format("%.2fx", v)
+    saveSoon()
+    setStatus(string.format("Speed %.2fx", v))
+end
 button(panel, "■ Stop emote", 12, 430, 110, 28, function() stopEmote() end)
 label(panel, "Loop", 138, 430, 36, 28, {TextColor3 = C.dim, TextSize = 12})
 switch(panel, UDim2.fromOffset(176, 432), settings.loop, function(v)
@@ -1785,7 +1800,8 @@ connect(UserInputService.InputBegan, function(input, processed)
             elseif input.KeyCode == Enum.KeyCode.Backspace or input.KeyCode == Enum.KeyCode.Delete then
                 data.binds[key] = nil
                 setStatus("Bind cleared")
-            elseif k == settings.keyToggle or k == settings.keyGui or k == settings.keyStop then
+            elseif k == settings.keyToggle or k == settings.keyGui or k == settings.keyStop
+                or k == settings.keySpeedDown or k == settings.keySpeedUp or k == settings.keySpeedReset then
                 setStatus(k .. " is already a hotkey")
             else
                 for other, boundKey in pairs(data.binds) do if boundKey == k then data.binds[other] = nil end end
@@ -1825,6 +1841,12 @@ connect(UserInputService.InputBegan, function(input, processed)
         end
     elseif k == settings.keyStop then
         stopEmote()
+    elseif k == settings.keySpeedDown then
+        setSpeed(settings.speed - 0.1)
+    elseif k == settings.keySpeedUp then
+        setSpeed(settings.speed + 0.1)
+    elseif k == settings.keySpeedReset then
+        setSpeed(1)
     else
         -- emote binds: press to play, press again to stop
         for entryKey, keyName in pairs(data.binds) do
