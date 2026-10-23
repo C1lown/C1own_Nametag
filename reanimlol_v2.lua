@@ -1,18 +1,15 @@
--- reanimlol v3 (restyled GUI, animated tab / category switching, default Roblox animations suppressed)
--- Body reanimation + emote library (categories / sub-categories / favorites / custom),
--- walk/idle/run/jump/fall/climb/swim state overrides, speed + blend controls,
--- R6/R15 detection, rebindable hotkeys and a keyframe recorder.
--- No downloaded code or game remotes. Enable the toggle (or press the hotkey) first.
--- Saved data (favorites, custom emotes, state picks, settings, recordings) is written to
--- the "Reanimlol" folder when your executor supports writefile/readfile.
+-- reanimlol v4: keyframe-only
+-- Body reanimation driven purely by keyframes. No Roblox animation assets, IDs or AnimationTracks are
+-- used: every clip is a list of timed poses (built in, recorded, or imported as JSON) that the engine
+-- samples itself and writes to the rig's Motor6D.Transform values. Works on R6 and R15.
+-- Enable the toggle (or press the hotkey) first. Saved data (favorites, imported clips, state picks,
+-- settings, recordings) is written to the "Reanimlol" folder when your executor supports writefile.
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local Provider = game:GetService("KeyframeSequenceProvider")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local HttpService = game:GetService("HttpService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local player = Players.LocalPlayer
 assert(player, "Run reanimlol on the client")
 
@@ -462,111 +459,16 @@ local function saveSoon()
 end
 
 ----------------------------------------------------------------------
--- Library data
+-- Library data: everything is built from keyframes (no animation assets, IDs or downloads)
 ----------------------------------------------------------------------
 local STATES = {"idle", "walk", "run", "jump", "fall", "climb", "swim"}
 local function cap(s) return s:sub(1, 1):upper() .. s:sub(2) end
-local function S(a, b, c, d, e, f, g)
-    return {idle = a, walk = b, run = c, jump = d, fall = e, climb = f, swim = g}
-end
 
--- IDs are Roblox's public animation assets. R15 packs come from memory of the standard
--- animation packs: if one fails to load, the status line says so and the default is used.
-local PACKS = {
-    {name = "Default", r15 = S(507766666, 507777826, 507767714, 507765000, 507767968, 507765644, 507784897),
-     r6 = S(180435571, 180426354, 180426354, 125750702, 180436148, 180436334, nil)},
-    {name = "Ninja", r15 = S(656117400, 656121766, 656118852, 656117878, 656115606, 656114359, 656119721)},
-    {name = "Robot", r15 = S(616088211, 616095330, 616091570, 616090535, 616087089, 616086039, 616092998)},
-    {name = "Zombie", r15 = S(616158929, 616168032, 616163682, 616161997, 616157476, 616156119, 616165109)},
-    {name = "Levitation", r15 = S(616006778, 616013216, 616010382, 616008936, 616005863, 616003713, 616011509)},
-    {name = "Cartoony", r15 = S(742637544, 742640026, 742638842, 742637942, 742637151, 742636889, 742639220)},
-    {name = "Mage", r15 = S(707742142, 707897309, 707861613, 707853694, 707829716, 707826056, 707876443)},
-    {name = "Stylish", r15 = S(616136790, 616146177, 616140816, 616139451, 616134815, 616133594, 616143378)},
-    {name = "Superhero", r15 = S(616111295, 616122287, 616117076, 616115533, 616108001, 616104706, 616119360)},
-    {name = "Toy", r15 = S(782841498, 782843345, 782842708, 782847020, 782846423, 782843869, 782844582)},
-    {name = "Vampire", r15 = S(1083445855, 1083473930, 1083462077, 1083455352, 1083443587, 1083439238, 1083464683)},
-    {name = "Werewolf", r15 = S(1083195517, 1083178339, 1083216690, 1083218792, 1083189019, 1083182000, 1083222527)},
-}
-
-local DEFAULTS = {}
-for _, s in ipairs(STATES) do
-    DEFAULTS[s] = {name = "Default " .. cap(s), r15 = PACKS[1].r15[s], r6 = PACKS[1].r6[s]}
-end
-
-local LIB = {}
-local function add(cat, sub, name, r15, r6)
-    LIB[#LIB + 1] = {key = "b:" .. cat .. "/" .. sub .. "/" .. name, name = name, cat = cat, sub = sub, r15 = r15, r6 = r6}
-end
-add("Emotes", "Greetings", "Wave", 507770239, 128777973)
-add("Emotes", "Greetings", "Hello", 3576686446)
-add("Emotes", "Greetings", "Salute", 3333474484)
-add("Emotes", "Reactions", "Cheer", 507770677, 129423030)
-add("Emotes", "Reactions", "Laugh", 507770818, 129423131)
-add("Emotes", "Reactions", "Applaud", 5915779043)
-add("Emotes", "Reactions", "Shrug", 3576968026)
-add("Emotes", "Poses", "Point", 507770453, 128853357)
-add("Emotes", "Poses", "Stadium", 3360686498)
-add("Emotes", "Poses", "Tilt", 3360692915)
-add("Dances", "Classic", "Dance", 507771019, 182435998)
-add("Dances", "Classic", "Dance 2", 507776043, 182436842)
-add("Dances", "Classic", "Dance 3", 507777268, 182436935)
-for _, pack in ipairs(PACKS) do
-    for _, s in ipairs(STATES) do
-        add("Movement", pack.name, pack.name .. " " .. cap(s), pack.r15[s], pack.r6 and pack.r6[s] or nil)
-    end
-end
-
-local recorded = {} -- recorded entries {key,name,cat,sub,recorded=true,clip=,path=}
-
-local function customToEntry(c)
-    local e = {key = "c:" .. c.cat .. "/" .. c.sub .. "/" .. c.name .. "/" .. tostring(c.id),
-        name = c.name, cat = c.cat, sub = c.sub, custom = true, src = c}
-    if c.rig == "R15" then e.r15 = c.id elseif c.rig == "R6" then e.r6 = c.id else e.any = c.id end
-    return e
-end
-local function getEntries()
-    local out = {}
-    for _, e in ipairs(LIB) do out[#out + 1] = e end
-    for _, c in ipairs(data.custom) do out[#out + 1] = customToEntry(c) end
-    for _, e in ipairs(recorded) do out[#out + 1] = e end
-    return out
-end
-local function entryId(e, rig)
-    if not e then return nil end
-    if rig == "R6" then return e.r6 or e.any end
-    return e.r15 or e.any
-end
-local function playerRig()
-    local ch = player.Character
-    local h = ch and ch:FindFirstChildOfClass("Humanoid")
-    return (h and h.RigType == Enum.HumanoidRigType.R6) and "R6" or "R15"
-end
-
-----------------------------------------------------------------------
--- Keyframe decoding / sampling / loading
-----------------------------------------------------------------------
-local function decode(sequence)
-    local frames = sequence:GetKeyframes()
-    table.sort(frames, function(a, b) return a.Time < b.Time end)
-    local curves, duration = {}, 0
-    for _, frame in ipairs(frames) do
-        duration = math.max(duration, frame.Time)
-        for _, pose in ipairs(frame:GetDescendants()) do
-            if pose:IsA("Pose") then
-                local curve = curves[pose.Name]
-                if not curve then curve = {}; curves[pose.Name] = curve end
-                local key = {time = frame.Time, value = CFrame.identity:Lerp(pose.CFrame, math.clamp(pose.Weight, 0, 1)),
-                    style = pose.EasingStyle.Name, direction = pose.EasingDirection.Name}
-                if #curve > 0 and curve[#curve].time == key.time then curve[#curve] = key
-                else curve[#curve + 1] = key end
-            end
-        end
-    end
-    return curves, duration
-end
-
-local styles = {Linear = Enum.EasingStyle.Linear, Cubic = Enum.EasingStyle.Cubic,
-    CubicV2 = Enum.EasingStyle.Cubic, Elastic = Enum.EasingStyle.Elastic, Bounce = Enum.EasingStyle.Bounce}
+-- Keyframe sampling ----------------------------------------------------
+local styles = {Linear = Enum.EasingStyle.Linear, Sine = Enum.EasingStyle.Sine, Quad = Enum.EasingStyle.Quad,
+    Cubic = Enum.EasingStyle.Cubic, CubicV2 = Enum.EasingStyle.Cubic, Quart = Enum.EasingStyle.Quart,
+    Quint = Enum.EasingStyle.Quint, Back = Enum.EasingStyle.Back, Elastic = Enum.EasingStyle.Elastic,
+    Bounce = Enum.EasingStyle.Bounce}
 local directions = {In = Enum.EasingDirection.In, Out = Enum.EasingDirection.Out, InOut = Enum.EasingDirection.InOut}
 
 local function sample(curve, time, duration, looped)
@@ -593,49 +495,290 @@ local function sample(curve, time, duration, looped)
     return a.value:Lerp(b.value, alpha)
 end
 
-local function rigOf(curves)
-    if curves.UpperTorso or curves.LowerTorso then return "R15" end
-    if curves.Torso then return "R6" end
-    return nil
+-- Pose keyframes -------------------------------------------------------
+-- A clip is {duration, loop, hold, keys = {{t, pose, style, dir}}}. A pose maps joint names to
+-- {x, y, z} rotation in degrees (+ optional dx, dy, dz in studs). Rotations are relative to the rest
+-- pose, in the parent part's axes (x = right, y = up, z = back). That makes one clip work on R6 and R15:
+-- each joint is turned into a Motor6D Transform using that rig's own C0 when the clip is baked.
+local JOINTS = {Hips = true, Torso = true, Head = true, LArm = true, RArm = true, LForearm = true,
+    RForearm = true, LLeg = true, RLeg = true, LShin = true, RShin = true}
+local PARTS = {
+    R15 = {Hips = "LowerTorso", Torso = "UpperTorso", Head = "Head", LArm = "LeftUpperArm", RArm = "RightUpperArm",
+        LForearm = "LeftLowerArm", RForearm = "RightLowerArm", LLeg = "LeftUpperLeg", RLeg = "RightUpperLeg",
+        LShin = "LeftLowerLeg", RShin = "RightLowerLeg"},
+    R6 = {Hips = "Torso", Torso = "Torso", Head = "Head", LArm = "Left Arm", RArm = "Right Arm",
+        LLeg = "Left Leg", RLeg = "Right Leg"}, -- R6 has no waist, elbows or knees
+}
+local ZERO = {0, 0, 0, 0, 0, 0}
+
+local function poseTransforms(pose, rig, motors)
+    local out, map = {}, PARTS[rig] or PARTS.R15
+    for joint, v in pairs(pose) do
+        local part = map[joint]
+        local motor = part and motors[part]
+        if motor then
+            local rc = motor.C0.Rotation
+            local delta = CFrame.Angles(math.rad(v[1] or 0), math.rad(v[2] or 0), math.rad(v[3] or 0))
+            local t = rc:Inverse() * delta * rc
+            if (v[4] or 0) ~= 0 or (v[5] or 0) ~= 0 or (v[6] or 0) ~= 0 then
+                t = CFrame.new(rc:VectorToObjectSpace(Vector3.new(v[4] or 0, v[5] or 0, v[6] or 0))) * t
+            end
+            out[part] = out[part] and (out[part] * t) or t
+        end
+    end
+    return out
 end
 
-local cache, pending = {}, {}
--- Yields. Returns anim or (nil, errorMessage).
-local function loadAnim(id)
-    id = tostring(id)
-    if cache[id] then return cache[id] end
-    if pending[id] then
-        while pending[id] do task.wait() end
-        if cache[id] then return cache[id] end
-        return nil, "Can't load keyframes"
+local function bakeClip(def, rig, motors)
+    local used, last = {}, 0
+    for _, k in ipairs(def.keys) do
+        last = math.max(last, k.t)
+        for joint in pairs(k.pose) do used[joint] = true end
     end
-    pending[id] = true
-    local result = {}
-    task.spawn(function()
-        local ok, seq = pcall(function() return Provider:GetKeyframeSequenceAsync("rbxassetid://" .. id) end)
-        result.ok, result.seq, result.done = ok, seq, true
-        if result.abandoned and ok and typeof(seq) == "Instance" then seq:Destroy() end
+    local curves = {}
+    for _, k in ipairs(def.keys) do
+        local full = {}
+        for joint in pairs(used) do full[joint] = k.pose[joint] or ZERO end
+        for part, cf in pairs(poseTransforms(full, rig, motors)) do
+            local curve = curves[part]
+            if not curve then curve = {}; curves[part] = curve end
+            curve[#curve + 1] = {time = k.t, value = cf, style = k.style or "Sine", direction = k.dir or "InOut"}
+        end
+    end
+    return {curves = curves, duration = math.max(def.duration or last, last, 0.05), looped = def.loop ~= false,
+        hold = def.hold == true, rig = rig}
+end
+
+local function parseDef(t)
+    if type(t) ~= "table" or type(t.keys) ~= "table" or #t.keys < 1 then return nil, "Need a keys list" end
+    local keys = {}
+    for _, k in ipairs(t.keys) do
+        if type(k) ~= "table" or type(k.t) ~= "number" or type(k.pose) ~= "table" then
+            return nil, "Each key needs t and pose"
+        end
+        local pose = {}
+        for joint, v in pairs(k.pose) do
+            if not JOINTS[joint] then return nil, "Unknown joint " .. tostring(joint) end
+            if type(v) ~= "table" then return nil, "Bad pose for " .. joint end
+            local arr = {}
+            for i = 1, 6 do arr[i] = tonumber(v[i]) or 0 end
+            pose[joint] = arr
+        end
+        keys[#keys + 1] = {t = math.max(k.t, 0), pose = pose,
+            style = (styles[k.style] or k.style == "Constant") and k.style or "Sine",
+            dir = directions[k.dir] and k.dir or "InOut"}
+    end
+    table.sort(keys, function(a, b) return a.t < b.t end)
+    local merged = {}
+    for _, k in ipairs(keys) do
+        if #merged > 0 and merged[#merged].t == k.t then merged[#merged] = k else merged[#merged + 1] = k end
+    end
+    local duration = tonumber(t.duration) or merged[#merged].t
+    duration = math.max(duration, merged[#merged].t)
+    if duration <= 0 then return nil, "Clip needs a duration" end
+    return {duration = duration, loop = t.loop ~= false, hold = t.hold == true, keys = merged}
+end
+
+-- Authoring helpers ----------------------------------------------------
+local function K(t, pose, style, dir) return {t = t, pose = pose, style = style, dir = dir} end
+-- Samples fn(angle 0..2pi) n times across one loop
+local function cycle(duration, n, fn)
+    local keys = {}
+    for i = 0, n do
+        keys[#keys + 1] = {t = duration * i / n, pose = fn(i / n * 2 * math.pi), style = "Linear", dir = "InOut"}
+    end
+    return {duration = duration, loop = true, keys = keys}
+end
+
+local LIB = {}
+local function add(cat, sub, name, def)
+    LIB[#LIB + 1] = {key = "b:" .. cat .. "/" .. sub .. "/" .. name, name = name, cat = cat, sub = sub, def = def}
+    return LIB[#LIB].key
+end
+
+-- Emotes ---------------------------------------------------------------
+local WAVE_HEAD = {0, 0, -6}
+add("Emotes", "Greetings", "Wave", {duration = 2, loop = false, keys = {
+    K(0,    {RArm = {0, 0, 4}}),
+    K(0.35, {RArm = {0, 0, 112}, RForearm = {0, 0, 66}, Head = WAVE_HEAD}),
+    K(0.6,  {RArm = {0, 0, 122}, RForearm = {0, 0, 100}, Head = WAVE_HEAD}),
+    K(0.85, {RArm = {0, 0, 102}, RForearm = {0, 0, 36}, Head = WAVE_HEAD}),
+    K(1.1,  {RArm = {0, 0, 122}, RForearm = {0, 0, 100}, Head = WAVE_HEAD}),
+    K(1.35, {RArm = {0, 0, 102}, RForearm = {0, 0, 36}, Head = WAVE_HEAD}),
+    K(1.6,  {RArm = {0, 0, 114}, RForearm = {0, 0, 66}, Head = WAVE_HEAD}),
+    K(2,    {RArm = {0, 0, 4}}),
+}})
+add("Emotes", "Greetings", "Bow", {duration = 2.4, loop = false, keys = {
+    K(0, {}),
+    K(0.7, {Torso = {-50, 0, 0}, Head = {-12, 0, 0}, RArm = {-8, 0, 4}, LArm = {-8, 0, -4}}, "Quad", "Out"),
+    K(1.5, {Torso = {-50, 0, 0}, Head = {-12, 0, 0}, RArm = {-8, 0, 4}, LArm = {-8, 0, -4}}),
+    K(2.4, {}),
+}})
+add("Emotes", "Greetings", "Point", {duration = 1.8, loop = false, keys = {
+    K(0, {}),
+    K(0.3, {RArm = {88, 0, 4}, Torso = {0, -10, 0}, Head = {0, -10, 0}}, "Quad", "Out"),
+    K(1.4, {RArm = {88, 0, 4}, Torso = {0, -10, 0}, Head = {0, -10, 0}}),
+    K(1.8, {}),
+}})
+add("Emotes", "Reactions", "Cheer", {duration = 0.6, loop = true, keys = {
+    K(0,   {RArm = {0, 0, 150}, LArm = {0, 0, -150}, Head = {6, 0, 0}}),
+    K(0.3, {RArm = {0, 0, 172}, LArm = {0, 0, -172}, Head = {14, 0, 0}, Hips = {0, 0, 0, 0, 0.22, 0}, RLeg = {-10, 0, 0}, LLeg = {-10, 0, 0}}),
+    K(0.6, {RArm = {0, 0, 150}, LArm = {0, 0, -150}, Head = {6, 0, 0}}),
+}})
+add("Emotes", "Reactions", "Laugh", {duration = 0.5, loop = true, keys = {
+    K(0,    {Torso = {-8, 0, 0}, Head = {20, 0, 0}, RArm = {25, 0, 10}, LArm = {25, 0, -10}, RForearm = {70, 0, 0}, LForearm = {70, 0, 0}}),
+    K(0.25, {Torso = {-18, 0, 0}, Head = {28, 0, 0}, RArm = {25, 0, 10}, LArm = {25, 0, -10}, RForearm = {70, 0, 0}, LForearm = {70, 0, 0}}),
+    K(0.5,  {Torso = {-8, 0, 0}, Head = {20, 0, 0}, RArm = {25, 0, 10}, LArm = {25, 0, -10}, RForearm = {70, 0, 0}, LForearm = {70, 0, 0}}),
+}})
+add("Emotes", "Reactions", "Shrug", {duration = 1.6, loop = false, keys = {
+    K(0, {}),
+    K(0.3, {RArm = {20, 0, 22}, LArm = {20, 0, -22}, RForearm = {0, 0, 55}, LForearm = {0, 0, -55}, Head = {0, 0, 8}}, "Quad", "Out"),
+    K(1.2, {RArm = {20, 0, 22}, LArm = {20, 0, -22}, RForearm = {0, 0, 55}, LForearm = {0, 0, -55}, Head = {0, 0, 8}}),
+    K(1.6, {}),
+}})
+add("Emotes", "Reactions", "Clap", {duration = 0.5, loop = true, keys = {
+    K(0,    {RArm = {50, 0, -42}, LArm = {50, 0, 42}, RForearm = {40, 0, -25}, LForearm = {40, 0, 25}}),
+    K(0.25, {RArm = {50, 0, -20}, LArm = {50, 0, 20}, RForearm = {40, 0, -8}, LForearm = {40, 0, 8}}),
+    K(0.5,  {RArm = {50, 0, -42}, LArm = {50, 0, 42}, RForearm = {40, 0, -25}, LForearm = {40, 0, 25}}),
+}})
+add("Emotes", "Poses", "T-Pose", {duration = 0.6, loop = false, hold = true, keys = {
+    K(0, {}), K(0.25, {RArm = {0, 0, 90}, LArm = {0, 0, -90}}, "Quad", "Out"), K(0.6, {RArm = {0, 0, 90}, LArm = {0, 0, -90}}),
+}})
+add("Emotes", "Poses", "Arms Up", {duration = 0.6, loop = false, hold = true, keys = {
+    K(0, {}), K(0.3, {RArm = {0, 0, 170}, LArm = {0, 0, -170}, Head = {8, 0, 0}}, "Quad", "Out"),
+    K(0.6, {RArm = {0, 0, 170}, LArm = {0, 0, -170}, Head = {8, 0, 0}}),
+}})
+add("Emotes", "Poses", "Zombie Arms", {duration = 0.6, loop = false, hold = true, keys = {
+    K(0, {}), K(0.3, {RArm = {88, 0, 3}, LArm = {88, 0, -3}, Head = {0, 0, 8}, Torso = {-8, 0, 0}}, "Quad", "Out"),
+    K(0.6, {RArm = {88, 0, 3}, LArm = {88, 0, -3}, Head = {0, 0, 8}, Torso = {-8, 0, 0}}),
+}})
+
+-- Dances ---------------------------------------------------------------
+add("Dances", "Classic", "Bounce", cycle(0.8, 8, function(a)
+    local s = math.sin(a)
+    return {Hips = {0, 0, s * 4, 0, 0.12 * s * s, 0}, RArm = {s * 30, 0, 20}, LArm = {-s * 30, 0, -20},
+        RForearm = {50, 0, 0}, LForearm = {50, 0, 0}, RShin = {-10 * (1 - math.cos(2 * a)), 0, 0},
+        LShin = {-10 * (1 - math.cos(2 * a)), 0, 0}}
+end))
+add("Dances", "Classic", "Disco", cycle(1.2, 12, function(a)
+    local s = math.sin(a)
+    return {RArm = {0, 0, 30 + 120 * (0.5 + 0.5 * s)}, LArm = {0, 0, -(30 + 120 * (0.5 - 0.5 * s))},
+        Hips = {0, 0, s * 8}, Torso = {0, 0, -s * 6}, Head = {0, 0, s * 5},
+        RLeg = {0, 0, 8}, LLeg = {0, 0, -8}, RShin = {-10 * (0.5 + 0.5 * math.cos(2 * a)), 0, 0},
+        LShin = {-10 * (0.5 - 0.5 * math.cos(2 * a)), 0, 0}}
+end))
+add("Dances", "Classic", "Sway", cycle(2.4, 8, function(a)
+    local s = math.sin(a)
+    return {Hips = {0, 0, s * 6, s * 0.12, 0, 0}, Torso = {0, 0, -s * 8}, Head = {0, 0, s * 6},
+        RArm = {0, 0, 35 + s * 15}, LArm = {0, 0, -(35 - s * 15)}, RForearm = {30, 0, 0}, LForearm = {30, 0, 0}}
+end))
+add("Dances", "Classic", "Spin", {duration = 1.2, loop = true, keys = {
+    K(0,   {Hips = {0, 0, 0}, RArm = {0, 0, 70}, LArm = {0, 0, -70}}, "Linear"),
+    K(0.3, {Hips = {0, 90, 0}, RArm = {0, 0, 70}, LArm = {0, 0, -70}}, "Linear"),
+    K(0.6, {Hips = {0, 180, 0}, RArm = {0, 0, 70}, LArm = {0, 0, -70}}, "Linear"),
+    K(0.9, {Hips = {0, 270, 0}, RArm = {0, 0, 70}, LArm = {0, 0, -70}}, "Linear"),
+    K(1.2, {Hips = {0, 360, 0}, RArm = {0, 0, 70}, LArm = {0, 0, -70}}, "Linear"),
+}})
+
+-- Movement packs (state clips) ----------------------------------------
+local function makePack(o)
+    local fwd, out, lean, bend = o.fwd or 0, o.out or 6, o.lean or 0, o.bend or 8
+    local twist = o.twist or 4
+    local P = {}
+    P.idle = cycle(o.idleDur or 4, 8, function(a)
+        local s = math.sin(a)
+        return {Hips = {-lean * 0.3, 0, 0}, Torso = {s * 1.5 - lean * 0.3, 0, 0}, Head = {-s, 0, o.tilt or 0},
+            RArm = {fwd + s * 1.2, 0, out + s * 1.5}, LArm = {fwd + s * 1.2, 0, -(out + s * 1.5)},
+            RForearm = {bend, 0, 0}, LForearm = {bend, 0, 0}}
     end)
-    local deadline = os.clock() + 15
-    while not result.done and os.clock() < deadline do task.wait() end
-    if not result.done then
-        result.abandoned = true
-        pending[id] = nil
-        return nil, "Keyframes timed out"
+    local function gait(dur, leg, arm, knee, bounce, tilt)
+        return cycle(dur, 12, function(a)
+            local s, c = math.sin(a), math.cos(a)
+            local swing = s * arm
+            return {
+                Hips = {-tilt, s * twist, 0, 0, bounce * math.abs(c), 0},
+                Torso = {0, -s * twist * 1.5, 0},
+                Head = {tilt * 0.7, 0, o.tilt or 0},
+                RArm = {fwd - swing, 0, out}, LArm = {fwd + swing, 0, -out},
+                RForearm = {bend + math.max(0, -s) * arm * 0.6, 0, 0}, LForearm = {bend + math.max(0, s) * arm * 0.6, 0, 0},
+                RLeg = {s * leg, 0, 0}, LLeg = {-s * leg, 0, 0},
+                RShin = {-math.max(0, c) * knee, 0, 0}, LShin = {-math.max(0, -c) * knee, 0, 0},
+            }
+        end)
     end
-    local anim, err
-    if result.ok and typeof(result.seq) == "Instance" then
-        local parsed, curves, duration = pcall(decode, result.seq)
-        local looped = true
-        pcall(function() looped = result.seq.Loop end)
-        result.seq:Destroy()
-        if parsed and duration > 0 then
-            anim = {curves = curves, duration = duration, looped = looped, rig = rigOf(curves)}
-        else err = "No keyframes in animation" end
-    else err = "Can't load keyframes" end
-    cache[id] = anim
-    pending[id] = nil
-    return anim, err
+    P.walk = gait(o.walkDur or 0.8, o.walkLeg or 32, o.walkArm or 28, o.walkKnee or 40, o.bounce or 0.05, lean)
+    P.run = gait(o.runDur or 0.55, o.runLeg or 55, o.runArm or 60, o.runKnee or 85, (o.bounce or 0.05) * 2, lean + 12)
+    P.jump = {duration = 0.4, loop = false, keys = {
+        K(0, {RArm = {fwd, 0, out}, LArm = {fwd, 0, -out}}),
+        K(0.25, {RArm = {fwd * 0.5, 0, out + 70}, LArm = {fwd * 0.5, 0, -(out + 70)}, RLeg = {14, 0, 0}, LLeg = {-8, 0, 0},
+            RShin = {-30, 0, 0}, LShin = {-14, 0, 0}, Hips = {-lean * 0.3, 0, 0}}, "Quad", "Out"),
+    }}
+    P.fall = cycle(1, 8, function(a)
+        local s = math.sin(a)
+        return {RArm = {fwd * 0.4, 0, out + 95 + s * 10}, LArm = {fwd * 0.4, 0, -(out + 95 - s * 10)},
+            RLeg = {8 + s * 5, 0, 0}, LLeg = {-4 - s * 5, 0, 0}, RShin = {-18, 0, 0}, LShin = {-10, 0, 0}, Head = {6, 0, 0}}
+    end)
+    P.climb = cycle(0.9, 12, function(a)
+        local s = math.sin(a)
+        return {RArm = {140 + s * 25, 0, 10}, LArm = {140 - s * 25, 0, -10},
+            RLeg = {20 + s * 25, 0, 0}, LLeg = {20 - s * 25, 0, 0},
+            RShin = {-(25 + s * 20), 0, 0}, LShin = {-(25 - s * 20), 0, 0}, Hips = {0, s * 3, 0, 0, 0, 0}}
+    end)
+    P.swim = cycle(1.2, 12, function(a)
+        local s, c = math.sin(a), math.cos(a)
+        return {Hips = {-70, 0, 0}, RArm = {130 + s * 50, 0, 15}, LArm = {130 - s * 50, 0, -15},
+            RLeg = {c * 20, 0, 0}, LLeg = {-c * 20, 0, 0}, RShin = {-10, 0, 0}, LShin = {-10, 0, 0}, Head = {55, 0, 0}}
+    end)
+    return P
+end
+
+local PACKS = {
+    {name = "Default", o = {}},
+    {name = "Zombie", o = {fwd = 82, out = 4, lean = 8, bend = 10, tilt = 10, walkLeg = 24, walkArm = 6, walkKnee = 14,
+        walkDur = 1.1, runDur = 0.8, runArm = 8, runKnee = 25, twist = 7}},
+    {name = "Bouncy", o = {walkLeg = 40, walkArm = 40, walkKnee = 70, walkDur = 0.65, runDur = 0.45, bounce = 0.16, lean = 4}},
+    {name = "Robot", o = {walkLeg = 28, walkArm = 20, walkKnee = 0, runKnee = 10, bend = 0, twist = 0, bounce = 0}},
+}
+local DEFAULTS = {}
+for _, pack in ipairs(PACKS) do
+    local clips = makePack(pack.o)
+    for _, s in ipairs(STATES) do
+        local key = add("Movement", pack.name, pack.name .. " " .. cap(s), clips[s])
+        if pack.name == "Default" then DEFAULTS[s] = {name = "Default " .. cap(s), lib = key} end
+    end
+end
+
+-- Entries --------------------------------------------------------------
+local recorded = {} -- recorded entries {key,name,cat,sub,recorded=true,clip=,path=}
+local fileClips = {} -- keyframe JSON files from Reanimlol/keyframes
+
+-- drop leftovers from older versions (animation IDs)
+for s, v in pairs(data.states) do
+    if type(v) ~= "table" or not (v.lib or v.rec) then data.states[s] = nil end
+end
+for i = #data.custom, 1, -1 do
+    if type(data.custom[i]) ~= "table" or not data.custom[i].def then table.remove(data.custom, i) end
+end
+
+local function customToEntry(c)
+    return {key = "c:" .. c.cat .. "/" .. c.sub .. "/" .. c.name, name = c.name, cat = c.cat, sub = c.sub,
+        custom = true, src = c, def = c.def}
+end
+local function getEntries()
+    local out = {}
+    for _, e in ipairs(LIB) do out[#out + 1] = e end
+    for _, c in ipairs(data.custom) do out[#out + 1] = customToEntry(c) end
+    for _, e in ipairs(fileClips) do out[#out + 1] = e end
+    for _, e in ipairs(recorded) do out[#out + 1] = e end
+    return out
+end
+local function findEntry(key)
+    for _, e in ipairs(getEntries()) do if e.key == key then return e end end
+end
+local function playerRig()
+    local ch = player.Character
+    local h = ch and ch:FindFirstChildOfClass("Humanoid")
+    return (h and h.RigType == Enum.HumanoidRigType.R6) and "R6" or "R15"
 end
 
 ----------------------------------------------------------------------
@@ -820,7 +963,7 @@ local closeBtn = button(panel, "✕", 336, 7, 28, 24, function() if shared.Reani
 ----------------------------------------------------------------------
 -- Engine: state animations, emotes, blending, recording
 ----------------------------------------------------------------------
-local engine = {motors = {}, stateAnims = {}, gen = {}, token = 0, fadeT = 1, snapshot = {}}
+local engine = {motors = {}, stateAnims = {}, gen = {}, token = 0, fadeT = 1, snapshot = {}, baked = {}}
 local rec = {on = false, clip = nil, t = 0, acc = 0, frames = 0}
 local updateRecUI
 
@@ -835,13 +978,22 @@ end
 
 local function resolveAnim(entry)
     if not entry then return nil end
+    if entry.clip then return entry.clip end
     if entry.rec then
         for _, r in ipairs(recorded) do if r.name == entry.rec then return r.clip end end
         return nil
     end
-    local id = entryId(entry, engine.rig)
-    if not id then return nil end
-    return (loadAnim(id))
+    if entry.lib then entry = findEntry(entry.lib) end
+    if not entry then return nil end
+    if entry.clip then return entry.clip end
+    local def = entry.def
+    if not def or not engine.rig then return nil end
+    local baked = engine.baked[def]
+    if not baked then
+        baked = bakeClip(def, engine.rig, engine.motors)
+        engine.baked[def] = baked
+    end
+    return baked
 end
 
 local function refreshState(s)
@@ -921,7 +1073,7 @@ local function engineStep(dt)
             t = t % dur
         elseif t >= dur then
             t = dur
-            if e then engine.emote = nil end
+            if e and not desired.hold then engine.emote = nil end
         end
         engine.fadeT += dt
         local alpha = settings.blend > 0 and math.min(engine.fadeT / settings.blend, 1) or 1
@@ -952,6 +1104,7 @@ local function engineStart()
     engine.root = copy:FindFirstChild("HumanoidRootPart")
     engine.rig = engine.hum.RigType == Enum.HumanoidRigType.R6 and "R6" or "R15"
     engine.motors = {}
+    engine.baked = {}
     for _, m in ipairs(copy:GetDescendants()) do
         if m:IsA("Motor6D") and m.Part1 then engine.motors[m.Part1.Name] = m end
     end
@@ -1022,25 +1175,16 @@ local function startEmote(anim, name)
     local matched = 0
     for n in pairs(engine.motors) do if anim.curves[n] then matched += 1 end end
     if matched == 0 then setStatus("Animation doesn't match rig"); return false end
-    engine.emote = {anim = anim, loop = settings.loop, age = 0, name = name}
+    engine.emote = {anim = anim, loop = settings.loop and not anim.hold, age = 0, name = name}
     setStatus(name)
     return true
 end
 
 playEntry = function(entry)
     turnOn(function()
-        if entry.clip then startEmote(entry.clip, entry.name); return end
-        local id = entryId(entry, engine.rig)
-        if not id then setStatus("No " .. tostring(engine.rig) .. " version"); return end
-        engine.token += 1
-        local token = engine.token
-        setStatus("Loading...", true)
-        task.spawn(function()
-            local anim, err = loadAnim(id)
-            if destroyed or token ~= engine.token or not engine.copy then return end
-            if not anim then setStatus(err or "Can't load keyframes"); return end
-            startEmote(anim, entry.name)
-        end)
+        local anim = resolveAnim(entry)
+        if not anim then setStatus("Can't play " .. entry.name); return end
+        startEmote(anim, entry.name)
     end)
 end
 
@@ -1068,55 +1212,6 @@ local function deserializeClip(tbl)
     return clip
 end
 
-local function exportSequence(clip, name)
-    if not engine.copy then return nil end
-    local seq = Instance.new("KeyframeSequence")
-    seq.Name, seq.Loop = name, true
-    local times, seen = {}, {}
-    for _, curve in pairs(clip.curves) do
-        for _, k in ipairs(curve) do
-            local key = string.format("%.4f", k.time)
-            if not seen[key] then seen[key] = true; times[#times + 1] = k.time end
-        end
-    end
-    table.sort(times)
-    local motors = {}
-    for _, m in ipairs(engine.copy:GetDescendants()) do
-        if m:IsA("Motor6D") and m.Part0 and m.Part1 and clip.curves[m.Part1.Name] then motors[#motors + 1] = m end
-    end
-    for _, time in ipairs(times) do
-        local kf = Instance.new("Keyframe")
-        kf.Time = time
-        local poses = {}
-        local rootPose = Instance.new("Pose")
-        rootPose.Name, rootPose.Weight, rootPose.Parent = "HumanoidRootPart", 0, kf
-        poses.HumanoidRootPart = rootPose
-        local remaining = {}
-        for i, m in ipairs(motors) do remaining[i] = m end
-        local progress = true
-        while #remaining > 0 and progress do
-            progress = false
-            for i = #remaining, 1, -1 do
-                local m = remaining[i]
-                local parentPose = poses[m.Part0.Name]
-                if parentPose then
-                    local p = Instance.new("Pose")
-                    p.Name = m.Part1.Name
-                    p.CFrame = sample(clip.curves[m.Part1.Name], time, clip.duration, false)
-                    p.Weight = 1
-                    p.Parent = parentPose
-                    poses[m.Part1.Name] = p
-                    table.remove(remaining, i)
-                    progress = true
-                end
-            end
-        end
-        kf.Parent = seq
-    end
-    seq.Parent = ReplicatedStorage
-    return seq
-end
-
 do -- load saved recordings
     if hasFS and type(listfiles) == "function" then
         pcall(function()
@@ -1135,10 +1230,29 @@ do -- load saved recordings
     end
 end
 
+do -- load keyframe JSON files (Reanimlol/keyframes/*.json)
+    if hasFS and type(listfiles) == "function" then
+        pcall(function()
+            ensureFolder(ROOT); ensureFolder(ROOT .. "/keyframes")
+            for _, path in ipairs(listfiles(ROOT .. "/keyframes")) do
+                if tostring(path):sub(-5) == ".json" then
+                    local ok, tbl = pcall(function() return HttpService:JSONDecode(readfile(path)) end)
+                    local def = ok and parseDef(tbl)
+                    if def then
+                        local name = tostring(tbl.name or tostring(path):match("([^/\\]+)%.json$") or "Imported")
+                        fileClips[#fileClips + 1] = {key = "f:" .. name, name = name, cat = tostring(tbl.cat or "Imported"),
+                            sub = tostring(tbl.sub or "Files"), def = def}
+                    end
+                end
+            end
+        end)
+    end
+end
+
 ----------------------------------------------------------------------
 -- GUI: tabs
 ----------------------------------------------------------------------
-local tabNames = {"Emotes", "States", "Add", "Record", "Settings"}
+local tabNames = {"Emotes", "States", "Import", "Record", "Settings"}
 local tabFrames, tabButtons, tabOrder = {}, {}, {}
 local TAB_X, TAB_Y = 12, 74
 T("Frame", {Position = UDim2.fromOffset(12, 71), Size = UDim2.new(1, -24, 0, 1), BackgroundColor3 = C.stroke, BackgroundTransparency = .4}, panel)
@@ -1330,7 +1444,7 @@ connect(search:GetPropertyChangedSignal("Text"), function() rebuildList() end)
 
 local function assignState(s, e)
     if e.recorded then data.states[s] = {name = e.name, rec = e.name}
-    else data.states[s] = {name = e.name, r15 = e.r15, r6 = e.r6, any = e.any} end
+    else data.states[s] = {name = e.name, lib = e.key} end
     saveData()
     refreshStateRows()
     refreshState(s)
@@ -1348,12 +1462,9 @@ local tabS = tabFrames.States
 local packRow = chipRow(tabS, 0)
 local stateBoxes = {}
 local function applyPack(pack)
-    local rig = engine.rig or playerRig()
-    local ids = (rig == "R6") and pack.r6 or pack.r15
-    if not ids then setStatus(pack.name .. " is R15 only"); return end
     for _, s in ipairs(STATES) do
         if pack.name == "Default" then data.states[s] = nil
-        else data.states[s] = {name = pack.name .. " " .. cap(s), r15 = pack.r15[s], r6 = pack.r6 and pack.r6[s] or nil} end
+        else data.states[s] = {name = pack.name .. " " .. cap(s), lib = "b:Movement/" .. pack.name .. "/" .. pack.name .. " " .. cap(s)} end
     end
     saveData(); refreshStateRows()
     for _, s in ipairs(STATES) do refreshState(s) end
@@ -1363,57 +1474,55 @@ for i, pack in ipairs(PACKS) do chip(packRow, pack.name, false, i, function() ap
 for i, s in ipairs(STATES) do
     local y = 32 + (i - 1) * 36
     label(tabS, cap(s), 4, y, 56, 30)
-    local tb = box(tabS, "Animation ID", 60, y, 226, 30)
+    local tb = box(tabS, "Clip name", 60, y, 226, 30)
     stateBoxes[s] = tb
     button(tabS, "Reset", 292, y, 64, 30, function()
         data.states[s] = nil; saveData(); refreshStateRows(); refreshState(s)
     end)
     tb.FocusLost:Connect(function()
-        local text = tb.Text:match("^%s*(.-)%s*$")
-        if text == stateEntry(s).name then return end
-        local id = text:match("%d+")
-        if id and id:find("[1-9]") then
-            data.states[s] = {name = "ID " .. id, any = tonumber(id)}
-            saveData(); refreshState(s); setStatus(cap(s) .. " = " .. id)
+        local text = tb.Text:match("^%s*(.-)%s*$"):lower()
+        if text == stateEntry(s).name:lower() then return end
+        for _, e in ipairs(getEntries()) do
+            if e.name:lower() == text then assignState(s, e); return end
         end
+        setStatus("No clip with that name")
         refreshStateRows()
     end)
 end
-label(tabS, "Pick a pack, type an ID, or select a library entry and\nuse the buttons on the Emotes tab.", 4, 288, 350, 28,
+label(tabS, "Pick a pack, type a clip name from the library, or select an\nentry and use the buttons on the Emotes tab.", 4, 288, 350, 28,
     {TextSize = 10, TextColor3 = C.dim, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top})
 refreshStateRows = function()
     for _, s in ipairs(STATES) do stateBoxes[s].Text = stateEntry(s).name end
 end
 
--- Add tab ------------------------------------------------------------
-local tabA = tabFrames.Add
+-- Import tab ----------------------------------------------------------
+local tabA = tabFrames.Import
 local nameBox = box(tabA, "Name", 0, 0, 356, 30)
-local idBox = box(tabA, "Animation / KeyframeSequence ID", 0, 36, 356, 30)
-local catBox = box(tabA, "Category", 0, 72, 172, 30)
-local subBox = box(tabA, "Sub-category", 184, 72, 172, 30)
+local catBox = box(tabA, "Category", 0, 36, 172, 30)
+local subBox = box(tabA, "Sub-category", 184, 36, 172, 30)
 catBox.Text, subBox.Text = "Custom", "General"
-local rigChoices, rigIndex = {"Both", "R15", "R6"}, 1
-local rigBtn
-rigBtn = button(tabA, "Rig: Both", 0, 108, 172, 30, function()
-    rigIndex = rigIndex % #rigChoices + 1
-    rigBtn.Text = "Rig: " .. rigChoices[rigIndex]
-end)
-button(tabA, "Add to library", 184, 108, 172, 30, function()
-    local id = idBox.Text:match("%d+")
-    if not id or not id:find("[1-9]") then setStatus("Enter an animation ID"); return end
-    local function trim(s, d) s = s:match("^%s*(.-)%s*$"); return s ~= "" and s or d end
-    local entry = {name = trim(nameBox.Text, "Custom " .. id), id = tonumber(id),
-        cat = trim(catBox.Text, "Custom"), sub = trim(subBox.Text, "General"), rig = rigChoices[rigIndex]}
+local jsonBox = box(tabA, "Paste keyframe JSON", 0, 72, 356, 130)
+jsonBox.MultiLine, jsonBox.TextWrapped, jsonBox.TextYAlignment = true, true, Enum.TextYAlignment.Top
+jsonBox.TextSize = 11
+T("UIPadding", {PaddingTop = UDim.new(0, 8), PaddingRight = UDim.new(0, 8)}, jsonBox)
+button(tabA, "Add to library", 0, 208, 356, 30, function()
+    local ok, decoded = pcall(function() return HttpService:JSONDecode(jsonBox.Text) end)
+    if not ok or type(decoded) ~= "table" then setStatus("Keyframe JSON is invalid"); return end
+    local def, err = parseDef(decoded)
+    if not def then setStatus(err or "Bad keyframes"); return end
+    local function trim(str, d) str = str:match("^%s*(.-)%s*$"); return str ~= "" and str or d end
+    local entry = {name = trim(nameBox.Text, tostring(decoded.name or "Imported " .. (#data.custom + 1))),
+        cat = trim(catBox.Text, "Custom"), sub = trim(subBox.Text, "General"), def = def}
     table.insert(data.custom, entry)
     saveData()
-    nameBox.Text, idBox.Text = "", ""
+    nameBox.Text, jsonBox.Text = "", ""
     ui.main, ui.sub = entry.cat, "All"
-    refreshChips(); rebuildList()
+    refreshChips(); rebuildList(true)
     setStatus("Added " .. entry.name)
     showTab("Emotes")
 end)
-label(tabA, "Paste any public KeyframeSequence / animation asset ID. Pick the rig it was made for (R6 and R15 animations are not interchangeable). Use \"Category\" and \"Sub-category\" to organise your own folders; they show up as chips on the Emotes tab.",
-    2, 150, 352, 90, {TextSize = 11, TextColor3 = C.dim, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top})
+label(tabA, "Keyframe format: {\"duration\":1,\"loop\":false,\"keys\":[{\"t\":0,\"pose\":{\"RArm\":[0,0,5]}},{\"t\":0.5,\"pose\":{\"RArm\":[0,0,120]}}]}. Joints: Hips Torso Head LArm RArm LForearm RForearm LLeg RLeg LShin RShin. Values are [x,y,z] degrees, optionally + [dx,dy,dz] studs. One clip works on R6 and R15. Add \"hold\":true to freeze on the last pose. Files in Reanimlol/keyframes/ load automatically.",
+    2, 244, 352, 72, {TextSize = 10, TextColor3 = C.dim, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top})
 
 -- Record tab ---------------------------------------------------------
 local tabR = tabFrames.Record
@@ -1467,11 +1576,10 @@ button(tabR, "Save", 250, 66, 106, 30, function()
             writefile(path, HttpService:JSONEncode(serializeClip(clip, name)))
         end)
     end
-    local exported = pcall(exportSequence, clip, name)
     rec.clip, rec.frames = nil, 0
     recName.Text = ""
     updateRecUI(); refreshChips(); rebuildList()
-    setStatus("Saved " .. name .. (exported and "" or " (no instance)"))
+    setStatus("Saved " .. name)
 end)
 label(tabR, "Rate", 2, 104, 40, 14, {TextColor3 = C.dim, TextSize = 12})
 local rateVal = label(tabR, settings.recordRate .. " Hz", 300, 104, 56, 14, {TextColor3 = C.dim, TextSize = 12})
@@ -1480,7 +1588,7 @@ slider(tabR, 46, 104, 246, 5, 30, settings.recordRate, function(v)
     rateVal.Text = settings.recordRate .. " Hz"
     saveSoon()
 end)
-label(tabR, "● Record captures whatever the rig is doing (emote, state animation, speed and blend included) as keyframes. \"Snap pose\" adds a single keyframe 0.3s after the last one. Save adds it to Library > Recorded, writes Reanimlol/recordings/<name>.json, and creates a KeyframeSequence in ReplicatedStorage while reanim is on.",
+label(tabR, "● Record captures whatever the rig is doing (emote, state animation, speed and blend included) as keyframes. \"Snap pose\" adds a single keyframe 0.3s after the last one. Save adds it to Library > Recorded, writes Reanimlol/recordings/<name>.json.",
     2, 142, 352, 120, {TextSize = 11, TextColor3 = C.dim, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top})
 
 -- Settings tab -------------------------------------------------------
@@ -1530,7 +1638,7 @@ button(panel, "■ Stop emote", 12, 430, 110, 28, function() stopEmote() end)
 label(panel, "Loop", 138, 430, 36, 28, {TextColor3 = C.dim, TextSize = 12})
 switch(panel, UDim2.fromOffset(176, 432), settings.loop, function(v)
     settings.loop = v
-    if engine.emote then engine.emote.loop = v end
+    if engine.emote then engine.emote.loop = v and not engine.emote.anim.hold end
     saveSoon()
 end)
 
