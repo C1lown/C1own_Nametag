@@ -874,16 +874,16 @@ local turnOn, turnOff, playEntry, stopEmote
 -- window buttons: minimize (collapses to the title bar) and close, round like Novoline's
 local function barButton(rightOffset, glyph, cb)
     local b = T("TextButton", {Size = UDim2.fromOffset(28, 28), Position = UDim2.new(1, -rightOffset - 28, 0.5, -14), Text = glyph,
-        TextSize = 15, TextTransparency = .35, BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = 1, ZIndex = 5}, panel)
+        TextSize = 15, TextTransparency = 0, BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = .82, ZIndex = 20}, panel)
     corner(b, 14)
-    b.MouseEnter:Connect(function() tween(b, {BackgroundTransparency = .9, TextTransparency = 0}, TweenInfo.new(.15)) end)
-    b.MouseLeave:Connect(function() tween(b, {BackgroundTransparency = 1, TextTransparency = .35}, TweenInfo.new(.2)) end)
+    b.MouseEnter:Connect(function() tween(b, {BackgroundTransparency = .6}, TweenInfo.new(.15)) end)
+    b.MouseLeave:Connect(function() tween(b, {BackgroundTransparency = .82}, TweenInfo.new(.2)) end)
     b.Activated:Connect(cb)
     return b
 end
-local closeBtn = barButton(14, "✕", function() if shared.ReanimlolCleanup then shared.ReanimlolCleanup() end end)
+local closeBtn = barButton(14, "X", function() if shared.ReanimlolCleanup then shared.ReanimlolCleanup() end end)
 local minimized = false
-barButton(14 + 28 + 4, "–", function()
+barButton(14 + 28 + 4, "-", function()
     minimized = not minimized
     panel.ClipsDescendants = true
     tween(panel, {Size = UDim2.fromOffset(PANEL_W, minimized and BAR_H or PANEL_H)}, TweenInfo.new(.35, Enum.EasingStyle.Quint, Enum.EasingDirection.Out))
