@@ -6,6 +6,13 @@ local HttpService = game:GetService("HttpService")
 
 local lp = Players.LocalPlayer
 
+-- The menu (GUI) exists ONLY for this exact Roblox username. Everyone else just gets the nametag.
+-- (Username only: display names can be changed by anyone, usernames can't.)
+local GUI_OWNER = "c1lown3"
+local function canUseMenu()
+    return lp.Name:lower() == GUI_OWNER
+end
+
 -- re-executing: cleanly unload the previous copy first (restores the tag it hid)
 local env = (getgenv and getgenv()) or _G
 pcall(function() if env.c1lownUnload then env.c1lownUnload() end end)
@@ -130,6 +137,7 @@ Template files are created automatically for everyone in the server, with
 A profile for YOUR OWN username changes your own tag.
 Online profiles (GitHub) are used when you have no active local file.
 Press "Reload profiles" in the Players tab after adding or editing files.
+(The menu itself only exists for the c1lown3 account.)
 ]])
         end
         if not isfile(PROFILES .. "/_example.json") then
@@ -325,7 +333,7 @@ end
 
 local EMO_ART = {
     icon = "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",
-    spark = "iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAMAAADVRocKAAAAkFBMVEXfWgClcRi/PwD/vwDEkB/87cQAAACteA73xUH0wj24gxT++/G2ewOibgnquDiveQ7//wCveQ6rdg2sdw3LmCN/fwCpVQCtdw7YpSypdA6qqgD/AACYZwP/fwDhrjKnaxLBjR340Wr/qgCjbQtVVQB/PwCZWwDMmQD75q2dawr624v98tYA/wB/AAB/VQCZTACR5TQ+AAAAMHRSTlMEDwQE//8A/P///v8J/P/SAa9Nb/4CA5D/MAMBCgL/E///Ay4DBAgF/yP//wECBgoJJO0nAAAEP0lEQVR42r1aWXujOBAke0igCBBgcQh8xbk2yc7+/3+33TqAJJ58MENHD37Atkpd1arWQcSIW7Tu59qYPSkAcQSKXcqy03QAd6wQIh/eeiIAxYaCc37DNBGAZv9A/7xjhiyCDgFKVhMB1KxCgIYQoEGA4l9FlUX3OQLwgShNFbux/YPKmgRAo8ZCoMqGBOAPVvL0r13KKyZJACRrRLprU16sSaNolVHwtM04z2vdEwD0TEISZQgg2T0BQG3ncRZblSUBgASNuYjjEweVBxKACjSO410qGvYnCUWN4G0ct2AW96rfHKBX/0ExOMQxqjwwtTmAssUgi+NknVksBjDWKGJo68xiBQAk0QkCQJWr5XM5WqMxJFGSxGAWDYEGvTUKBECVHwjSdECjAIYQgMvFIUSLkwiNIom9ysvTKFqhcWqTKHFmITcGgGLAUWOXRqCy3DwCpzEC2JpjtgVQ/U3Q2KXRcakI0dJZcHFGgQ3T6LJ0qkUr5rGIfbNmsW0ET7BqdBpj23Ewi6dNAWwStQ4AVYaac7clgNKPUAxGgAPUnLpXGwH02gySHUMSTWkkB7Ng+fI1gKqldmI6jT2AU9kuJ7Ws1a8A9GofhQ2r7KqmyGdJZAHyoqk6P533Jtr/rEpHVyiRg3R9P8qyanLsGzIfVxTg1glGAWZhH+Z5U5Xy0aHA365Q9h5A11JaSgbZlVXhtgOuiV2CxeB8xs9kJ2Zf5UVVdtIulbSUtb4G0OvaGEfmGw678MPmdqi7Nsss+c+30J6tFFnWWpSU+2AKDObNSWfMuHxFABlJ5dnGYc/6Fifo288u6PbvW9te4/ERoJzEDMUF41CgWweAnf8YPCVioqQ9ZEFUy3zyfOvbc+IfeW86tBNlwlM2/LBlykbgKbGjxmGLadjI9xjA7djO08OAg8Hg9idNgzBAGUZwB0vOmZLAdjIb9awl5wng5cNXE0o2CwYd6y7Cfcv45AS0TP2vARgRDu1pAoDCBxQdJ4YcRbsZzMjQdYqmHyReiUCR5egY0nQ4fkr7kJvTCCeRXy33Y4SZp//9xDgOIU1VmLj1aAo8pOksGOj09ZPGYdh8Nhs6WYeprUIEYD2mDtZzwazi3h/SWTB+Iryek9mwU+8aHLPmEsypNsGcog/m6dFl15XNh3mBtJxfXs7xO6twwy47P72wB/W12Wkjn/zS8zEo887sksnsHNvO7NjDkzR6sV3r+sF7kxq96ZNdl95ilHn46db564KjlxQc/bslE7IhulYyI8i+fquivycs+t+ybKFfeJEvHckXv+TLd/INyHdsoYg3geTbWPKNOP1RAvlhCPlxDvmBFPmRGvmhIPmxJv3BLPnRMvnhOPnxPvkFBf0VC/klEfk1F/lFHflVI/1lKfl1L/mF9TdcuduXBjqylwasWWC1oXrtwTq2WDWP1756olhVHZmiA/iFthbAyJV/+B/Fpxet20oiNQAAAABJRU5ErkJggg==",
+    spark = "iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAMAAADVRocKAAAAkFBMVEXfWgClcRi/PwD/vwDEkB/87cQAAACteA73xUH0wj24gxT++/G2ewOibgnquDiveQ7//wCveQ6rdg2sdw3LmCN/fwCpVQCtdw7YpSypdA6qqgD/AACYZwP/fwDhrjKnaxLBjR340Wr/qgCjbQtVVQB/PwCZWwDMmQD75q2dawr624v98tYA/wB/AAB/VQCZTACR5TQ+AAAAMHRSTlMEDwQE//8A/P///v8J/P/SAa9Nb/4CA5D/MAMBCgL/E///Ay4DBAgF/yP//wECBgoJJO0nAAAEP0lEQVR42r0aWXujOBAke0igCBBgcQh8xbk2yc7+/3+33TqAJJ58MENHD37Atkpd/ao1pJ6Z8wSpdqzKNBdMSWdIlpVZx6a6+GZdMTrbubjpVhzeAIkFj1iR2Sjn2Wmz01k/R19R32fnTG4g59JkT00T8z3sNmKrDMeI/m8wtMB46r/Zlk8j1sHLTpe6bYyVQ0gMdoqjMeRW47xlWW1dr3WzhgpsOz+kw3QdbgTz1KmuXdABZoW9ltTqDKCV8Rh2NWAVZJ1EhrDGLd8svNZMq/d/mGzOEOXF98/OplfF6jvDe7fqd2XdWgbZKuX/KfqhsIoaZcg8bP3N+sQ2GvVuOPSKW+YB7OHv+6ChJPQ0n8zLGHQHdZQUwEhFPPIOUvzjLQ0CXYCMgY/KKLv91ME/u5vkLJc35TMlEKJcC7vVuImnPihCTdrVdQt1r3Lm6v/7XQQ3f7VkpnTHT0gTBj3GmnjvRHsDMCYeZ/ixfDm3jEdKRY8sn96GYj3YGI+zNKUELZ1CgEZWbbnR+X+h5MVixX/OV1dHiVgX+Gvlt9jJc/gRPmXNNXNnT0NwqnQP9KIZwHH1o4eZG7QVXMpqVMLKJoN8Z/0VpHAYkVW0tLwn6gH+ZBFJ+N8w4hZdv8rFhpcGJsTmT4OJT0bGwjEs0nvYbnTK/yZyK3N5tZqSD+79xRX9N8YCVAZKwG4bA6S83IrXvG8Q/bPCc/a32E3F8WyHyqpTYqCqnjdyfCULsOtKx8WCGb17Q2RHNh36G0dYIEHK/OXXDbOMKKcQAmfE4KvWgfDwqtVVdoCSwtGhfK6i6oRqkQV37oD+jzRFTqAKXVAJmwTBhzTuRw+SlCW5XJEzh56XXyEQCJM5E8t8uHbZH4Xs9aV/sEYgq6e1PFt9RjHYP2fjRHxkgn+9JkUz8GYM8lcEHjnNKXbqJLHMGhw3mR61n7gwGHn4GbJdmvPjDl7BwXHYB6NxTA9RfozcqEJSiNw1ZLZnBG0OSomj7r0gUSKJvWEXp+LcdIw3xfo+qOBlGMqBYXOtuYmEKbOuEGWHk2J3cYlOHQS/MORthIVEJd1EdaJa+U5Q6nuX8HLoXChUa45MZSbTZxbYY8dQBT/BRX7Hlv/zsRUZ/mQ7tDxYNE0lzZtmwZeL+gC/WkxH9FhfF+m/+8ugvavDCGpuvKINEJk/X+n2xpnmZhdJa7Pm+wEQNNVQwWw5QKaVj2gD2hGLlWtJbmqIYASb4CJxMxa7C7VPWgiXA9J7GqVqUNXrrg6W7iDQvEIQAAAABJRU5ErkJggg==",
     cross = "iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAMAAADVRocKAAAAkFBMVEWjaQfhzKPz6dTMmQBVVQDChhAA/wB/PwBVqgC/PwC8kj3/VQC1gBqqqlUAAAD++/GueA+jawG3gBO3ewR/fwD//wCveQ7x59CteA2ueA2qVQCveQ2qdQy1iC2qdgz/AACZZweqqgDm1bLLqmjcxZb/fwDCnE/RtHjVu4R/XAu9lUTHo1z/qgCbdRGlbQt/AABKmebdAAAAMHRSTlMU//8FBP8BBAME/wNzAwD/+/z+CgIBz/9wkAOvTv4xAQoD////Av7//wf+/wMVKwI+x4WfAAAD30lEQVR42uWa6XabMBCFyd42rSSQxCIMAmM78Zr3f7uOhsVkqSMnTE96qp+xPR/iztzRkoARj+B/Aygpzb88A81m6c/0l6UCWHWdR1FcAYgGoFkgYJTsGxGgZjMHSJkhAhiWOkDOllQasNwBYkkksmaVEK0ISxLAkpVCFEUIIigSgGRpFDYPYZQxSQKoWR6Fi3kIIlhNAFBMxiJMLlEEQwDAKig4BxFmrCIAXDkJVpw354ngD9BPIMED54tQ5JW2kwOeWBULMec8AREO/n4X+EsAVSASDiIIEKGeHGCcBBuIz7dhdIbfBf51nKEEToQoZ9NrwNZQBXMHcJWw9xYh8C6zXgIUwd/vAn8jEuEPjM9XTgQ5McCwvJOA80cnwm5agNZBLwHn6He+IngCrkcSYKnN2PdJARU4XVhwPhKhmhQgXRU0PQCbzm5KgGVOgkUPuAAR9uBO0wEULrmSHpBg01ETAupnEnRNp54QYJ5J0DUdM6XIaiwBNp14yizSTI4laEXwLLV3AVbd1+aFBJ0Ipr5X9lMAbarKPeadzEW4HQO20JjlnftKVRn9MYCqlftlVc4yt+YdS4AiwDI7m5VOCQ1fPQ+glzXafX3A4JGLP5bAieAIEUIOmK/wE+0FULLCHyh48hhjhGEoNs2z+EBoNviB+0IMM8Ep1JVUJwHWKEzu/SEdgoto8zC/5G+My/nDJhIDJD3ssWSUsW8BrDI7/EDO0jwWURu8WD3OE35iJPPHVdFCIhHn6Qwbnd2ZIb0QYKXE9ydLCB6NgnOvMYJEACkRoqW04xms9/DkwysvtouEnzWSxbYYRIGZ7NfjGazbTOyCN+cGP0KaDtLm8LoDKHCydvMl3nvlHhB4X10w8EOFgB3Lbrq/NRefjA+Ei6YLdoNdL8B25RKne0XFx2eBKdW/IlA7cAvMXmRIoGzITqirc6cCD74RQ75mXSr1IqsrLEBTpqPiLbwhELwYlXVamlHQYDBOg/azLI/2g+n6Ti3M2/QcjKlso5jBYoMX51mOui77mjhdcEOBdblfro8x/mh21nRVHYyq+qTZtdUbdNVrrIddH31pJMoruz6+8lf+49dwlkrduoZzQNt+q+GATR9cw7lVavnBlgkGj1Yis9ctM5NoBdA+9Keavlbmz03fKP31ly1/ZeFFv3QkX/ySL9/JNyDkWyj6TSD5NpZ8I05+lEB/GEJ+nEN+IEV/pEZ+KEh+rEl+MEt+tEx/OE5+vE9+QUF+xUJ/SUR+zUV+UUd+1Uh/WUp+3Ut+YW3VGkQgvHLHSoD9+5JKZGZ1kGXVOVXw9f4zxCqpSAHkMzh//AbyBSylEpyprwAAAABJRU5ErkJggg==",
 }
 local emoAssets = {} -- name -> asset id usable as an Image
@@ -348,8 +356,6 @@ local function isOwner()
     return lp.Name:lower() == OWNER_NAME or lp.DisplayName:lower() == OWNER_NAME
 end
 -- Friend preset: applied automatically on TheyluvJayden543's account.
--- Icon is left empty; set one in the menu (Text & Icon tab) with an image ID
--- or a file in the executor workspace, then press "Save settings".
 local FRIEND_NAME = "theyluvjayden543"
 local FRIEND_DISPLAY = "wishyouwerehere"
 local FRIEND_PRESET = {
@@ -889,7 +895,8 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- UI
+-- UI (only usable by the c1lown3 account: for everyone else the root
+-- frame is destroyed at the bottom of the script and no key opens it)
 -- ====================================================================
 local BG = Color3.fromRGB(15, 15, 21)
 local PANEL = Color3.fromRGB(21, 21, 29)
@@ -913,7 +920,7 @@ end
 
 local root = mk("Frame", {
     Name = "Root", AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(540, 420),
-    Position = UDim2.fromScale(0.5, 0.5), BackgroundColor3 = BG, BorderSizePixel = 0, Visible = true,
+    Position = UDim2.fromScale(0.5, 0.5), BackgroundColor3 = BG, BorderSizePixel = 0, Visible = canUseMenu(),
 }, gui)
 corner(root, 12)
 ustroke(root)
@@ -1420,6 +1427,7 @@ end
 
 local toast
 local function showToast(plr, ex)
+    if not canUseMenu() then return end -- alerts are part of the menu: owner only
     if toast then toast:Destroy() end
     local f = mk("Frame", {
         AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, -70), Size = UDim2.fromOffset(330, 52),
@@ -2114,9 +2122,6 @@ task.spawn(function()
 end)
 
 -- ====================================================================
--- About / unload
--- ====================================================================
--- ====================================================================
 -- Animations tab: play an animation on YOUR character. Animations played on your
 -- own character replicate, so everyone in the server sees them.
 -- ====================================================================
@@ -2600,16 +2605,23 @@ if isOwner() then
         or "Couldn't load theme images (executor needs writefile + getcustomasset)")
 end
 
-connect(UserInputService.InputBegan, function(i, gp)
-    if i.UserInputType ~= Enum.UserInputType.Keyboard then return end
-    if listeningKey then
-        listeningKey = false
-        if i.KeyCode ~= Enum.KeyCode.Escape and i.KeyCode ~= Enum.KeyCode.Unknown then
-            cfg.menuKey = i.KeyCode.Name
+-- Only the c1lown3 account gets the menu. Everyone else: the menu is destroyed and
+-- no key is hooked up, so only the nametags remain.
+if canUseMenu() then
+    connect(UserInputService.InputBegan, function(i, gp)
+        if i.UserInputType ~= Enum.UserInputType.Keyboard then return end
+        if listeningKey then
+            listeningKey = false
+            if i.KeyCode ~= Enum.KeyCode.Escape and i.KeyCode ~= Enum.KeyCode.Unknown then
+                cfg.menuKey = i.KeyCode.Name
+            end
+            syncKey()
+            status("Menu key: " .. cfg.menuKey)
+            return
         end
-        syncKey()
-        status("Menu key: " .. cfg.menuKey)
-        return
-    end
-    if not gp and i.KeyCode.Name == cfg.menuKey then root.Visible = not root.Visible end
-end)
+        if not gp and i.KeyCode.Name == cfg.menuKey then root.Visible = not root.Visible end
+    end)
+else
+    root.Visible = false
+    root:Destroy()
+end
