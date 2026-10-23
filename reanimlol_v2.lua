@@ -1,9 +1,10 @@
+-- reanimlol v10.2 (Novoline skin): dark glass / monochrome restyle of the v10.1 GUI. Reanimation core and engine untouched.
 -- reanimlol v10.1: v7 GUI + ragdoll-remote reanimation core (the game's own ragdoll remote breaks your joints on the server)
 -- Body reanimation core is the one from your message__14_ file (unchanged). The GUI, keyframe
 -- library, recorder and importer are from v4/v5. Saved data goes to the "Reanimlol" folder when your
 -- executor supports writefile.
 
-warn("=== reanimlol V10.1 (ragdoll remote + speed keys) loaded ===")
+warn("=== reanimlol V10.2 (Novoline skin) loaded ===")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
@@ -664,10 +665,11 @@ end
 -- GUI skeleton (needed by engine for status text)
 ----------------------------------------------------------------------
 local C = {
-    bg = Color3.fromRGB(17, 17, 24), field = Color3.fromRGB(30, 30, 41), sel = Color3.fromRGB(56, 50, 98),
-    text = Color3.fromRGB(236, 236, 244), dim = Color3.fromRGB(143, 143, 164),
-    accent = Color3.fromRGB(124, 92, 255), off = Color3.fromRGB(46, 46, 62), list = Color3.fromRGB(22, 22, 31),
-    stroke = Color3.fromRGB(58, 56, 88),
+    -- Novoline palette: near-black glass, neutral greys, one light "pill" accent with dark ink on top of it
+    bg = Color3.fromRGB(18, 18, 18), field = Color3.fromRGB(30, 30, 30), sel = Color3.fromRGB(46, 46, 49),
+    text = Color3.fromRGB(244, 244, 244), dim = Color3.fromRGB(160, 160, 160),
+    accent = Color3.fromRGB(242, 242, 244), off = Color3.fromRGB(58, 58, 62), list = Color3.fromRGB(23, 23, 23),
+    stroke = Color3.fromRGB(55, 55, 55), ink = Color3.fromRGB(18, 18, 20), danger = Color3.fromRGB(255, 96, 96),
 }
 local EASE = TweenInfo.new(.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
 local function tween(o, props, info)
@@ -697,10 +699,10 @@ local function T(class, props, parent)
     local o = Instance.new(class)
     if o:IsA("GuiObject") then o.BorderSizePixel = 0 end
     if class == "TextLabel" or class == "TextButton" or class == "TextBox" then
-        o.Font = Enum.Font.GothamMedium; o.TextSize = 13; o.TextColor3 = C.text
+        o.Font = (class == "TextLabel") and Enum.Font.GothamMedium or Enum.Font.GothamBold; o.TextSize = 13; o.TextColor3 = C.text
         if class == "TextLabel" then o.BackgroundTransparency = 1 else o.BackgroundColor3 = C.field end
         if class == "TextButton" then o.AutoButtonColor = false end
-        if class == "TextBox" then o.ClearTextOnFocus = false; o.PlaceholderColor3 = Color3.fromRGB(135, 135, 135) end
+        if class == "TextBox" then o.ClearTextOnFocus = false; o.PlaceholderColor3 = Color3.fromRGB(118, 118, 124) end
     end
     for k, v in pairs(props) do o[k] = v end
     o.Parent = parent
@@ -711,7 +713,7 @@ local function corner(o, r)
 end
 local function button(parent, text, x, y, w, h, cb)
     local b = T("TextButton", {Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(w, h), Text = text, TextSize = 12}, parent)
-    corner(b, 7)
+    corner(b, 10)
     hoverable(b)
     if cb then b.Activated:Connect(cb) end
     return b
@@ -725,19 +727,21 @@ end
 local function box(parent, placeholder, x, y, w, h)
     local b = T("TextBox", {Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(w, h), Text = "",
         PlaceholderText = placeholder, TextXAlignment = Enum.TextXAlignment.Left}, parent)
-    corner(b, 6)
-    T("UIPadding", {PaddingLeft = UDim.new(0, 10)}, b)
+    corner(b, 10)
+    T("UIPadding", {PaddingLeft = UDim.new(0, 12)}, b)
+    b.Font = Enum.Font.GothamMedium
     return b
 end
 local function switch(parent, pos, initial, onChange)
     local b = T("TextButton", {Position = pos, Size = UDim2.fromOffset(46, 24), Text = "", BackgroundColor3 = C.off}, parent)
     corner(b, 12)
-    local knob = T("Frame", {Size = UDim2.fromOffset(18, 18), Position = UDim2.fromOffset(3, 3), BackgroundColor3 = C.text}, b)
+    local knob = T("Frame", {Size = UDim2.fromOffset(18, 18), Position = UDim2.fromOffset(3, 3), BackgroundColor3 = C.dim}, b)
     corner(knob, 9)
     local api = {value = initial}
     function api.set(v)
         api.value = v
         tween(b, {BackgroundColor3 = v and C.accent or C.off})
+        tween(knob, {BackgroundColor3 = v and C.ink or C.dim})
         TweenService:Create(knob, TweenInfo.new(.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Position = UDim2.fromOffset(v and 25 or 3, 3)}):Play()
     end
     b.Activated:Connect(function()
@@ -748,7 +752,7 @@ local function switch(parent, pos, initial, onChange)
     return api
 end
 local function slider(parent, x, y, w, min, max, value, onChange)
-    local bar = T("Frame", {Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(w, 14), BackgroundColor3 = C.field}, parent)
+    local bar = T("Frame", {Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(w, 14), BackgroundColor3 = C.off}, parent)
     corner(bar, 7)
     local fill = T("Frame", {Size = UDim2.fromScale(0, 1), BackgroundColor3 = C.accent}, bar)
     corner(fill, 7)
@@ -784,25 +788,44 @@ gui.Name, gui.ResetOnSpawn = "Reanimlol", false
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = player:WaitForChild("PlayerGui")
 local panel = T("Frame", {Size = UDim2.fromOffset(380, 470), Position = UDim2.new(0.5, -190, 0.5, -235),
-    BackgroundColor3 = C.bg, Active = true}, gui)
-corner(panel, 14)
+    BackgroundColor3 = Color3.new(1, 1, 1), Active = true}, gui)
+corner(panel, 26)
 do
+    -- Novoline glass: dark vertical gradient body, hairline white rim, soft top shine, dark drop glow
     local stroke = Instance.new("UIStroke")
-    stroke.Color, stroke.Thickness, stroke.Transparency, stroke.ApplyStrokeMode = C.stroke, 1.5, .2, Enum.ApplyStrokeMode.Border
+    stroke.Color, stroke.Thickness, stroke.Transparency, stroke.ApplyStrokeMode = Color3.new(1, 1, 1), 1, .84, Enum.ApplyStrokeMode.Border
     stroke.Parent = panel
     local grad = Instance.new("UIGradient")
     grad.Rotation = 90
-    grad.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(196, 196, 214))
+    grad.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(26, 26, 28)),
+        ColorSequenceKeypoint.new(0.45, Color3.fromRGB(16, 16, 17)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(8, 8, 9)),
+    })
     grad.Parent = panel
+    local shine = Instance.new("Frame")
+    shine.Name, shine.Size, shine.BackgroundColor3, shine.BackgroundTransparency = "Shine", UDim2.new(1, 0, 0, 70), Color3.new(1, 1, 1), .88
+    shine.BorderSizePixel, shine.Active, shine.ZIndex = 0, false, 0
+    shine.Parent = panel
+    corner(shine, 26)
+    local sg = Instance.new("UIGradient")
+    sg.Rotation = 90
+    sg.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 0.2), NumberSequenceKeypoint.new(0.6, 0.9), NumberSequenceKeypoint.new(1, 1)})
+    sg.Parent = shine
+    pcall(function()
+        local glow = Instance.new("UIShadow")
+        glow.Name, glow.Color, glow.BlurRadius, glow.Offset, glow.Transparency = "DarkGlow", Color3.new(0, 0, 0), UDim.new(0, 26), UDim2.fromOffset(0, 10), .45
+        glow.Parent = panel
+    end)
 end
 local panelScale = Instance.new("UIScale")
 panelScale.Scale = .9
 panelScale.Parent = panel
 panel.BackgroundTransparency = 1
 tween(panelScale, {Scale = 1}, TweenInfo.new(.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out))
-tween(panel, {BackgroundTransparency = 0}, TweenInfo.new(.3))
+tween(panel, {BackgroundTransparency = 0.04}, TweenInfo.new(.3))
 local dragBar = T("Frame", {Size = UDim2.new(1, 0, 0, 38), BackgroundTransparency = 1}, panel)
-local title = label(dragBar, "reanimlol", 16, 0, 190, 38, {Font = Enum.Font.GothamMedium, TextSize = 16,
+local title = label(dragBar, "reanimlol", 18, 0, 190, 38, {Font = Enum.Font.GothamBold, TextSize = 15,
     TextTruncate = Enum.TextTruncate.AtEnd})
 local rigLabel = label(dragBar, "", 212, 0, 40, 38, {TextColor3 = C.dim, TextSize = 12})
 do
@@ -1190,8 +1213,9 @@ loadKeyframeFiles()
 local tabNames = {"Emotes", "States", "Import", "Record", "Settings"}
 local tabFrames, tabButtons, tabOrder = {}, {}, {}
 local TAB_X, TAB_Y = 12, 74
-T("Frame", {Position = UDim2.fromOffset(12, 71), Size = UDim2.new(1, -24, 0, 1), BackgroundColor3 = C.stroke, BackgroundTransparency = .4}, panel)
-local indicator = T("Frame", {Position = UDim2.fromOffset(12, 68), Size = UDim2.fromOffset(68, 3), BackgroundColor3 = C.accent}, panel)
+T("Frame", {Position = UDim2.fromOffset(12, 71), Size = UDim2.new(1, -24, 0, 1), BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = .92}, panel)
+-- Novoline marks the active tab with a light pill instead of an underline; the slider stays as a hidden no-op
+local indicator = T("Frame", {Position = UDim2.fromOffset(12, 68), Size = UDim2.fromOffset(68, 3), BackgroundColor3 = C.accent, BackgroundTransparency = 1}, panel)
 corner(indicator, 2)
 local currentTab, tabToken = "Emotes", 0
 local function showTab(name)
@@ -1202,8 +1226,8 @@ local function showTab(name)
     local old = currentTab
     currentTab = name
     for n, b in pairs(tabButtons) do
-        setBase(b, n == name and C.sel or C.field)
-        tween(b, {TextColor3 = n == name and C.text or C.dim})
+        setBase(b, n == name and C.accent or C.field)
+        tween(b, {TextColor3 = n == name and C.ink or C.dim})
     end
     tween(indicator, {Position = UDim2.fromOffset(12 + (tabOrder[name] - 1) * 72, 68)}, TweenInfo.new(.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out))
     for n, f in pairs(tabFrames) do
@@ -1227,8 +1251,9 @@ for i, name in ipairs(tabNames) do
     tabFrames[name] = T("CanvasGroup", {Position = UDim2.fromOffset(TAB_X, TAB_Y), Size = UDim2.fromOffset(356, 318),
         BackgroundTransparency = 1, Visible = (i == 1)}, panel)
     tabButtons[name] = button(panel, name, 12 + (i - 1) * 72, 40, 68, 26, function() showTab(name) end)
-    tabButtons[name].TextColor3 = (i == 1) and C.text or C.dim
-    if i == 1 then setBase(tabButtons[name], C.sel) end
+    tabButtons[name].TextColor3 = (i == 1) and C.ink or C.dim
+    corner(tabButtons[name], 13)
+    if i == 1 then setBase(tabButtons[name], C.accent) end
 end
 
 local ui = {main = "All", sub = "All", selected = nil, rows = {}, bindBtn = {}}
@@ -1247,13 +1272,13 @@ local function clearButtons(row)
 end
 local function chip(row, text, active, order, cb)
     local b = T("TextButton", {AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.fromOffset(0, 24), Text = text,
-        TextSize = 12, LayoutOrder = order, BackgroundColor3 = C.field, TextColor3 = active and C.text or C.dim}, row)
+        TextSize = 12, LayoutOrder = order, BackgroundColor3 = C.field, TextColor3 = active and C.ink or C.dim}, row)
     T("UIPadding", {PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10)}, b)
     corner(b, 12)
     hoverable(b)
     if active then
         -- selected chip fades from the idle colour to the accent colour
-        task.defer(function() if b.Parent then setBase(b, C.accent); tween(b, {TextColor3 = C.text}) end end)
+        task.defer(function() if b.Parent then setBase(b, C.accent); tween(b, {TextColor3 = C.ink}) end end)
     end
     b.Activated:Connect(cb)
     return b
@@ -1267,7 +1292,7 @@ local subRow = chipRow(tabE, 60)
 local list = T("ScrollingFrame", {Position = UDim2.fromOffset(0, 90), Size = UDim2.fromOffset(356, 176),
     BackgroundColor3 = C.list, ScrollBarThickness = 4, CanvasSize = UDim2.new(),
     AutomaticCanvasSize = Enum.AutomaticSize.Y}, tabE)
-corner(list, 10)
+corner(list, 16)
 T("UIListLayout", {Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder}, list)
 T("UIPadding", {PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4), PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 4)}, list)
 label(tabE, "Select an animation, then pick a state to assign it to:", 2, 268, 350, 14, {TextSize = 10, TextColor3 = C.dim})
@@ -1340,7 +1365,7 @@ rebuildList = function(animate)
             order += 1
             local row = T("TextButton", {Size = UDim2.new(1, -6, 0, 30), Text = "", LayoutOrder = order,
                 BackgroundColor3 = (ui.selected and ui.selected.key == e.key) and C.sel or C.field}, list)
-            corner(row, 8)
+            corner(row, 11)
             local hasX = e.custom or e.recorded
             label(row, e.name, 10, 0, 135, 30, {TextTruncate = Enum.TextTruncate.AtEnd})
             label(row, e.sub, 150, 0, 90, 30, {TextSize = 10, TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Right})
@@ -1348,7 +1373,7 @@ rebuildList = function(animate)
             local bindBtn = T("TextButton", {Position = UDim2.new(1, hasX and -106 or -78, 0, 3), Size = UDim2.fromOffset(44, 24),
                 Text = keyLabel(data.binds[e.key]), TextSize = 11, TextTruncate = Enum.TextTruncate.AtEnd,
                 BackgroundColor3 = C.list, TextColor3 = data.binds[e.key] and C.text or C.dim}, row)
-            corner(bindBtn, 6)
+            corner(bindBtn, 9)
             ui.ebtn[e.key] = bindBtn
             bindBtn.Activated:Connect(function()
                 if ui.bindingEmote == e.key then
@@ -1448,7 +1473,7 @@ local function openDropdown(s, anchor)
     local frame = T("Frame", {Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(w, h),
         BackgroundColor3 = C.bg, ZIndex = 10}, panel)
     dropFrame = frame
-    corner(frame, 10)
+    corner(frame, 16)
     local stroke = Instance.new("UIStroke")
     stroke.Color, stroke.Thickness, stroke.ApplyStrokeMode = C.stroke, 1.5, Enum.ApplyStrokeMode.Border
     stroke.Parent = frame
@@ -1456,7 +1481,7 @@ local function openDropdown(s, anchor)
     local listFrame = T("ScrollingFrame", {Position = UDim2.fromOffset(6, 38), Size = UDim2.fromOffset(w - 12, h - 44),
         BackgroundColor3 = C.list, ScrollBarThickness = 4, CanvasSize = UDim2.new(),
         AutomaticCanvasSize = Enum.AutomaticSize.Y}, frame)
-    corner(listFrame, 8)
+    corner(listFrame, 12)
     T("UIListLayout", {Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder}, listFrame)
     T("UIPadding", {PaddingLeft = UDim.new(0, 3), PaddingRight = UDim.new(0, 3), PaddingTop = UDim.new(0, 3), PaddingBottom = UDim.new(0, 3)}, listFrame)
 
@@ -1469,7 +1494,7 @@ local function openDropdown(s, anchor)
             order += 1
             local row = T("TextButton", {Size = UDim2.new(1, -6, 0, 26), Text = "", LayoutOrder = order,
                 BackgroundColor3 = active and C.sel or C.field}, listFrame)
-            corner(row, 6)
+            corner(row, 9)
             label(row, text, 8, 0, 180, 26, {TextTruncate = Enum.TextTruncate.AtEnd})
             label(row, sub, 190, 0, 84, 26, {TextSize = 10, TextColor3 = C.dim,
                 TextXAlignment = Enum.TextXAlignment.Right, TextTruncate = Enum.TextTruncate.AtEnd})
@@ -1520,7 +1545,7 @@ openStatePicker = function(anchor)
     local frame = T("Frame", {Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(w, h),
         BackgroundColor3 = C.bg, ZIndex = 10}, panel)
     dropFrame = frame
-    corner(frame, 10)
+    corner(frame, 16)
     local stroke = Instance.new("UIStroke")
     stroke.Color, stroke.Thickness, stroke.ApplyStrokeMode = C.stroke, 1.5, Enum.ApplyStrokeMode.Border
     stroke.Parent = frame
@@ -1529,7 +1554,7 @@ openStatePicker = function(anchor)
     local picked = ui.selected
     for i, s in ipairs(STATES) do
         local row = T("TextButton", {Size = UDim2.new(1, 0, 0, 26), Text = "", LayoutOrder = i}, frame)
-        corner(row, 6)
+        corner(row, 9)
         label(row, cap(s), 10, 0, 100, 26)
         label(row, stateEntry(s).name, 110, 0, w - 130, 26, {TextSize = 10, TextColor3 = C.dim,
             TextXAlignment = Enum.TextXAlignment.Right, TextTruncate = Enum.TextTruncate.AtEnd})
@@ -1652,7 +1677,7 @@ local recInfo = label(tabR, "0.0s • 0 keyframes", 2, 0, 350, 24, {TextColor3 =
 local recBtn
 updateRecUI = function()
     recBtn.Text = rec.on and "■ Stop" or "● Record"
-    recBtn.TextColor3 = rec.on and Color3.fromRGB(255, 110, 110) or C.text
+    recBtn.TextColor3 = rec.on and C.danger or C.text
     local d = rec.clip and rec.clip.duration or 0
     recInfo.Text = string.format("%.1fs • %d keyframes", d, rec.clip and rec.frames or 0)
 end
