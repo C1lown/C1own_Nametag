@@ -729,73 +729,7 @@ add("Dances", "Classic", "Spin", {duration = 1.2, loop = true, keys = {
     K(1.2, {Hips = {0, 360, 0}, RArm = {0, 0, 70}, LArm = {0, 0, -70}}, "Linear"),
 }})
 
--- Movement packs (state clips) ----------------------------------------
-local function makePack(o)
-    local fwd, out, lean, bend = o.fwd or 0, o.out or 6, o.lean or 0, o.bend or 8
-    local twist = o.twist or 4
-    local P = {}
-    P.idle = cycle(o.idleDur or 4, 8, function(a)
-        local s = math.sin(a)
-        return {Hips = {-lean * 0.3, 0, 0}, Torso = {s * 1.5 - lean * 0.3, 0, 0}, Head = {-s, 0, o.tilt or 0},
-            RArm = {fwd + s * 1.2, 0, out + s * 1.5}, LArm = {fwd + s * 1.2, 0, -(out + s * 1.5)},
-            RForearm = {bend, 0, 0}, LForearm = {bend, 0, 0}}
-    end)
-    local function gait(dur, leg, arm, knee, bounce, tilt)
-        return cycle(dur, 12, function(a)
-            local s, c = math.sin(a), math.cos(a)
-            local swing = s * arm
-            return {
-                Hips = {-tilt, s * twist, 0, 0, bounce * math.abs(c), 0},
-                Torso = {0, -s * twist * 1.5, 0},
-                Head = {tilt * 0.7, 0, o.tilt or 0},
-                RArm = {fwd - swing, 0, out}, LArm = {fwd + swing, 0, -out},
-                RForearm = {bend + math.max(0, -s) * arm * 0.6, 0, 0}, LForearm = {bend + math.max(0, s) * arm * 0.6, 0, 0},
-                RLeg = {s * leg, 0, 0}, LLeg = {-s * leg, 0, 0},
-                RShin = {-math.max(0, c) * knee, 0, 0}, LShin = {-math.max(0, -c) * knee, 0, 0},
-            }
-        end)
-    end
-    P.walk = gait(o.walkDur or 0.8, o.walkLeg or 32, o.walkArm or 28, o.walkKnee or 40, o.bounce or 0.05, lean)
-    P.run = gait(o.runDur or 0.55, o.runLeg or 55, o.runArm or 60, o.runKnee or 85, (o.bounce or 0.05) * 2, lean + 12)
-    P.jump = {duration = 0.4, loop = false, keys = {
-        K(0, {RArm = {fwd, 0, out}, LArm = {fwd, 0, -out}}),
-        K(0.25, {RArm = {fwd * 0.5, 0, out + 70}, LArm = {fwd * 0.5, 0, -(out + 70)}, RLeg = {14, 0, 0}, LLeg = {-8, 0, 0},
-            RShin = {-30, 0, 0}, LShin = {-14, 0, 0}, Hips = {-lean * 0.3, 0, 0}}, "Quad", "Out"),
-    }}
-    P.fall = cycle(1, 8, function(a)
-        local s = math.sin(a)
-        return {RArm = {fwd * 0.4, 0, out + 95 + s * 10}, LArm = {fwd * 0.4, 0, -(out + 95 - s * 10)},
-            RLeg = {8 + s * 5, 0, 0}, LLeg = {-4 - s * 5, 0, 0}, RShin = {-18, 0, 0}, LShin = {-10, 0, 0}, Head = {6, 0, 0}}
-    end)
-    P.climb = cycle(0.9, 12, function(a)
-        local s = math.sin(a)
-        return {RArm = {140 + s * 25, 0, 10}, LArm = {140 - s * 25, 0, -10},
-            RLeg = {20 + s * 25, 0, 0}, LLeg = {20 - s * 25, 0, 0},
-            RShin = {-(25 + s * 20), 0, 0}, LShin = {-(25 - s * 20), 0, 0}, Hips = {0, s * 3, 0, 0, 0, 0}}
-    end)
-    P.swim = cycle(1.2, 12, function(a)
-        local s, c = math.sin(a), math.cos(a)
-        return {Hips = {-70, 0, 0}, RArm = {130 + s * 50, 0, 15}, LArm = {130 - s * 50, 0, -15},
-            RLeg = {c * 20, 0, 0}, LLeg = {-c * 20, 0, 0}, RShin = {-10, 0, 0}, LShin = {-10, 0, 0}, Head = {55, 0, 0}}
-    end)
-    return P
-end
-
-local PACKS = {
-    {name = "Default", o = {}},
-    {name = "Zombie", o = {fwd = 82, out = 4, lean = 8, bend = 10, tilt = 10, walkLeg = 24, walkArm = 6, walkKnee = 14,
-        walkDur = 1.1, runDur = 0.8, runArm = 8, runKnee = 25, twist = 7}},
-    {name = "Bouncy", o = {walkLeg = 40, walkArm = 40, walkKnee = 70, walkDur = 0.65, runDur = 0.45, bounce = 0.16, lean = 4}},
-    {name = "Robot", o = {walkLeg = 28, walkArm = 20, walkKnee = 0, runKnee = 10, bend = 0, twist = 0, bounce = 0}},
-}
-local DEFAULTS = {}
-for _, pack in ipairs(PACKS) do
-    local clips = makePack(pack.o)
-    for _, s in ipairs(STATES) do
-        local key = add("Movement", pack.name, pack.name .. " " .. cap(s), clips[s])
-        if pack.name == "Default" then DEFAULTS[s] = {name = "Default " .. cap(s), lib = key} end
-    end
-end
+-- No built-in state animations: states stay empty until you assign a clip
 
 -- Entries --------------------------------------------------------------
 local recorded = {} -- recorded entries {key,name,cat,sub,recorded=true,clip=,path=}
@@ -803,7 +737,7 @@ local fileClips = {} -- keyframe files from Reanimlol/keyframes
 
 -- drop leftovers from older versions (animation IDs)
 for s, v in pairs(data.states) do
-    if type(v) ~= "table" or not (v.lib or v.rec) then data.states[s] = nil end
+    if type(v) ~= "table" or not (v.lib or v.rec) or (v.lib and tostring(v.lib):sub(1, 11) == "b:Movement/") then data.states[s] = nil end
 end
 for i = #data.custom, 1, -1 do
     if type(data.custom[i]) ~= "table" or not (data.custom[i].def or data.custom[i].clipData) then table.remove(data.custom, i) end
@@ -1024,7 +958,9 @@ local engine = {motors = {}, stateAnims = {}, gen = {}, token = 0, fadeT = 1, sn
 local rec = {on = false, clip = nil, t = 0, acc = 0, frames = 0}
 local updateRecUI
 
-local function stateEntry(s) return data.states[s] or DEFAULTS[s] end
+local NO_STATE = {name = "None"}
+local EMPTY_CLIP = {curves = {}, duration = 1, looped = true} -- rest pose when no clip is assigned
+local function stateEntry(s) return data.states[s] or NO_STATE end
 
 local function usable(anim)
     if not anim then return false end
@@ -1058,11 +994,10 @@ local function refreshState(s)
     engine.gen[s] = (engine.gen[s] or 0) + 1
     local gen, copy = engine.gen[s], engine.copy
     task.spawn(function()
-        local anim = resolveAnim(stateEntry(s))
+        local anim = resolveAnim(data.states[s])
         if not usable(anim) then
-            if data.states[s] and not destroyed then setStatus(cap(s) .. " anim failed, using default") end
-            anim = resolveAnim(DEFAULTS[s])
-            if not usable(anim) then anim = nil end
+            if data.states[s] and not destroyed then setStatus(cap(s) .. " anim doesn't fit this rig") end
+            anim = nil
         end
         if destroyed or engine.copy ~= copy or engine.gen[s] ~= gen then return end
         engine.stateAnims[s] = anim
@@ -1108,7 +1043,7 @@ local function engineStep(dt)
     if e then
         desired, src, loop = e.anim, e, e.loop
     else
-        desired = engine.stateAnims[stateName] or engine.stateAnims.idle
+        desired = engine.stateAnims[stateName] or engine.stateAnims.idle or EMPTY_CLIP
         src = desired
         if desired then loop = desired.looped ~= false end
         if settings.walkSync and (stateName == "walk" or stateName == "run") then
@@ -1441,7 +1376,7 @@ end
 
 refreshChips = function()
     clearButtons(mainRow); clearButtons(subRow)
-    local mains, seen = {"All", "★ Favorites", "Emotes", "Dances", "Movement", "Custom", "Recorded"}, {}
+    local mains, seen = {"All", "★ Favorites", "Emotes", "Dances", "Custom", "Recorded"}, {}
     for _, m in ipairs(mains) do seen[m] = true end
     for _, e in ipairs(getEntries()) do
         if not seen[e.cat] then seen[e.cat] = true; mains[#mains + 1] = e.cat end
@@ -1559,18 +1494,7 @@ end)
 
 -- States tab ---------------------------------------------------------
 local tabS = tabFrames.States
-local packRow = chipRow(tabS, 0)
 local stateBoxes = {}
-local function applyPack(pack)
-    for _, s in ipairs(STATES) do
-        if pack.name == "Default" then data.states[s] = nil
-        else data.states[s] = {name = pack.name .. " " .. cap(s), lib = "b:Movement/" .. pack.name .. "/" .. pack.name .. " " .. cap(s)} end
-    end
-    saveData(); refreshStateRows()
-    for _, s in ipairs(STATES) do refreshState(s) end
-    setStatus(pack.name .. " pack")
-end
-for i, pack in ipairs(PACKS) do chip(packRow, pack.name, false, i, function() applyPack(pack) end) end
 -- Dropdown picker: lists every clip (built-in, imported, recorded) with a search box.
 -- It lives inside the panel (not the clipped tab frame) and a big invisible catcher closes it on outside click.
 local dropCatcher, dropFrame
@@ -1623,9 +1547,9 @@ local function openDropdown(s, anchor)
             row.Activated:Connect(function() cb(); closeDropdown() end)
         end
         if q == "" then
-            addRow("↺ Default", DEFAULTS[s].name, data.states[s] == nil, function()
+            addRow("✕ None", "", data.states[s] == nil, function()
                 data.states[s] = nil; saveData(); refreshStateRows(); refreshState(s)
-                setStatus(cap(s) .. " = " .. DEFAULTS[s].name)
+                setStatus(cap(s) .. " cleared")
             end)
         end
         -- clips whose name contains the state (e.g. "Walk") are listed first
@@ -1688,7 +1612,7 @@ openStatePicker = function(anchor)
 end
 
 for i, s in ipairs(STATES) do
-    local y = 32 + (i - 1) * 36
+    local y = 4 + (i - 1) * 36
     label(tabS, cap(s), 4, y, 56, 30)
     local tb = button(tabS, "", 60, y, 226, 30, function() openDropdown(s, stateBoxes[s]) end)
     tb.TextXAlignment = Enum.TextXAlignment.Left
@@ -1701,7 +1625,7 @@ for i, s in ipairs(STATES) do
         data.states[s] = nil; saveData(); refreshStateRows(); refreshState(s)
     end)
 end
-label(tabS, "Pick a pack, open a state's dropdown to choose any clip, or select an\nentry and use the buttons on the Emotes tab.", 4, 288, 350, 28,
+label(tabS, "No built-in state animations. Open a state's dropdown to choose any clip, or select an\nanimation on the Emotes tab and pick a state there.", 4, 262, 350, 28,
     {TextSize = 10, TextColor3 = C.dim, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top})
 refreshStateRows = function()
     for _, s in ipairs(STATES) do stateBoxes[s].Text = stateEntry(s).name end
