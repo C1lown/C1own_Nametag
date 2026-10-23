@@ -1,4 +1,4 @@
--- reanimlol v4: keyframe-only (replication fixes)
+-- reanimlol v5: keyframe-only (Motor6Ds are unparented so other players see the animation)
 -- Body reanimation driven purely by keyframes. No Roblox animation assets, IDs or AnimationTracks are
 -- used: every clip is a list of timed poses (built in, recorded, or imported as JSON) that the engine
 -- samples itself and writes to the rig's Motor6D.Transform values. Works on R6 and R15.
@@ -126,6 +126,11 @@ local function sourceObject(session, object)
         for _, property in ipairs({"C0", "C1", "Transform"}) do remember(session, object, property) end
       end
       object.Enabled = false
+      -- Disabling is client-only; actually unparenting the Motor6D is what the server sees as a broken weld.
+      if object:IsA("Motor6D") and not session.removedJoints[object] then
+        session.removedJoints[object] = object.Parent
+        object.Parent = nil
+      end
     end
   elseif object:IsA("BasePart") then
     for _, property in ipairs({"CanCollide", "Massless", "CustomPhysicalProperties", "Transparency", "Size"}) do
@@ -182,6 +187,13 @@ stopReanimation = function()
   release(function() api.stop_animation() end)
   if session then
     for _, object in ipairs(session.owned) do release(function() object:Destroy() end) end
+    -- Put removed Motor6Ds back (disabled until their saved values are restored below).
+    for joint, parent in pairs(session.removedJoints) do
+      release(function()
+        joint.Enabled = false
+        joint.Parent = parent
+      end)
+    end
     -- Rebuild the body before restoring joints, collisions, and RequiresNeck.
     if session.character.Parent and session.player.Character == session.character and session.humanoid.Health > 0 then
       release(function()
@@ -278,7 +290,7 @@ local function startReanimation()
       and humanoid.Health > 0 and not root.Anchored, "Character changed; try again.")
     local session = {
       player = player, character = character, humanoid = humanoid, root = root,
-      saved = {}, owned = {}, links = {}, parts = {}, jointCandidates = {}, cameras = {},
+      saved = {}, owned = {}, links = {}, parts = {}, jointCandidates = {}, cameras = {}, removedJoints = {},
       controls = controls, focused = true, lastOwnerCheck = 0,
     }
     state.rig.session = session
@@ -416,9 +428,11 @@ local function startReanimation()
         if joint:IsDescendantOf(character) then
           if bodyJoint(joint, character) then sourceObject(session, joint) end
         else
-          local saved = session.saved[joint]
-          if saved and saved.Enabled and joint.Parent then joint.Enabled = saved.Enabled.value end
-          session.jointCandidates[joint] = nil
+          if not session.removedJoints[joint] then
+            local saved = session.saved[joint]
+            if saved and saved.Enabled and joint.Parent then joint.Enabled = saved.Enabled.value end
+            session.jointCandidates[joint] = nil
+          end
         end
       end
       for part in pairs(session.parts) do if part:IsDescendantOf(character) then part.CanCollide = false end end
