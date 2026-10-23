@@ -7,6 +7,9 @@
 --
 -- Import fixes in this build:
 --   * keyframe files are detected by CONTENT (Lua tables with Time / CFrame.new vs JSON), not by extension
+--   * .txt files are supported (a Lua export or JSON pose file saved as .txt loads fine)
+--   * drop files in Reanimlol/keyframes/ (subfolders become sub-categories) and press "Reload folder"
+--     on the Import tab to pick up new / edited / deleted files without rejoining
 --   * "Load file" also tries .lua / .json / .txt when you type a name without an extension
 --   * the invalid-data message now tells you how much text arrived (pasting very large files fails
 --     because a text box can't hold them: use Load file instead)
@@ -1284,39 +1287,63 @@ do -- load saved recordings
     end
 end
 
-do -- load keyframe files (Reanimlol/keyframes/*.json, *.lua, *.txt)
-    -- The parser is picked by CONTENT, not by file extension: a Lua keyframe export saved as
-    -- ".json" (or a JSON file saved as ".lua") still loads.
-    if hasFS and type(listfiles) == "function" then
-        pcall(function()
-            ensureFolder(ROOT); ensureFolder(ROOT .. "/keyframes")
-            for _, path in ipairs(listfiles(ROOT .. "/keyframes")) do
-                path = tostring(path)
+-- Keyframe folder loader ------------------------------------------------
+-- Scans Reanimlol/keyframes (and subfolders) for .txt / .lua / .json files. The parser is chosen by
+-- file CONTENT, so a Lua export saved as .txt (or JSON saved as .lua) still loads. Subfolder names
+-- become the sub-category. Safe to call again at any time to reload. Returns loaded, failed counts.
+local loadKeyframeFiles
+loadKeyframeFiles = function()
+    local keyframeDir = ROOT .. "/keyframes"
+    table.clear(fileClips)
+    local loaded, failed = 0, 0
+    if not (hasFS and type(listfiles) == "function") then return 0, 0 end
+    ensureFolder(ROOT); ensureFolder(keyframeDir)
+
+    local function scan(folder, subName, depth)
+        local ok, paths = pcall(listfiles, folder)
+        if not ok or type(paths) ~= "table" then return end
+        for _, path in ipairs(paths) do
+            path = (tostring(path):gsub("\\", "/"))
+            local isDir = false
+            pcall(function() isDir = isfolder(path) end)
+            if isDir then
+                if depth < 4 then scan(path, path:match("([^/]+)/?$") or subName, depth + 1) end
+            else
                 local ext = (path:match("%.(%w+)$") or ""):lower()
-                local base = path:match("([^/\\]+)%.%w+$") or "Imported"
-                if ext == "json" or ext == "lua" or ext == "txt" then
-                    local ok, raw = pcall(readfile, path)
-                    if ok and type(raw) == "string" then
+                if ext == "txt" or ext == "lua" or ext == "json" then
+                    local base = path:match("([^/]+)%.%w+$") or "Imported"
+                    local okR, raw = pcall(readfile, path)
+                    local added = false
+                    if okR and type(raw) == "string" then
+                        raw = (raw:gsub("^\239\187\191", "")) -- strip UTF-8 BOM
                         if looksLikeLuaKeyframes(raw) then
                             for _, item in ipairs(parseLuaClips(raw)) do
                                 local name = item.name == "Imported" and base or item.name
-                                fileClips[#fileClips + 1] = {key = "f:" .. name, name = name, cat = "Imported", sub = "Files", clip = item.clip}
+                                fileClips[#fileClips + 1] = {key = "f:" .. name, name = name, cat = "Imported",
+                                    sub = subName, clip = item.clip}
+                                added = true
                             end
                         else
                             local okJ, tbl = pcall(function() return HttpService:JSONDecode(raw) end)
                             local def = okJ and parseDef(tbl)
                             if def then
                                 local name = tostring(tbl.name or base)
-                                fileClips[#fileClips + 1] = {key = "f:" .. name, name = name, cat = tostring(tbl.cat or "Imported"),
-                                    sub = tostring(tbl.sub or "Files"), def = def}
+                                fileClips[#fileClips + 1] = {key = "f:" .. name, name = name,
+                                    cat = tostring(tbl.cat or "Imported"), sub = tostring(tbl.sub or subName), def = def}
+                                added = true
                             end
                         end
                     end
+                    if added then loaded += 1 else failed += 1 end
                 end
             end
-        end)
+        end
     end
+
+    scan(keyframeDir, "Files", 0)
+    return loaded, failed
 end
+loadKeyframeFiles()
 
 ----------------------------------------------------------------------
 -- GUI: tabs
@@ -1570,7 +1597,7 @@ local nameBox = box(tabA, "Name (optional)", 0, 0, 356, 30)
 local catBox = box(tabA, "Category", 0, 36, 172, 30)
 local subBox = box(tabA, "Sub-category", 184, 36, 172, 30)
 catBox.Text, subBox.Text = "Custom", "General"
-local fileBox = box(tabA, "Workspace file (.lua / .json)", 0, 72, 244, 30)
+local fileBox = box(tabA, "Workspace file (.txt / .lua / .json)", 0, 72, 244, 30)
 local jsonBox = box(tabA, "...or paste keyframes here", 0, 108, 356, 92)
 jsonBox.MultiLine, jsonBox.TextWrapped, jsonBox.TextYAlignment = true, true, Enum.TextYAlignment.Top
 jsonBox.TextSize = 11
@@ -1616,12 +1643,12 @@ button(tabA, "Load file", 250, 72, 106, 30, function()
     if not hasFS then setStatus("No file access"); return end
     local path = trim(fileBox.Text, "")
     if path == "" then setStatus("Type a file name first"); return end
-    -- try the name as typed, inside Reanimlol/keyframes and Reanimlol, and with .lua/.json/.txt added
+    -- try the name as typed, inside Reanimlol/keyframes and Reanimlol, and with .txt/.lua/.json added
     local candidates = {}
     for _, base in ipairs({path, ROOT .. "/keyframes/" .. path, ROOT .. "/" .. path}) do
         candidates[#candidates + 1] = base
         if not base:match("%.%w+$") then
-            for _, ext in ipairs({".lua", ".json", ".txt"}) do candidates[#candidates + 1] = base .. ext end
+            for _, ext in ipairs({".txt", ".lua", ".json"}) do candidates[#candidates + 1] = base .. ext end
         end
     end
     local text
@@ -1630,13 +1657,23 @@ button(tabA, "Load file", 250, 72, 106, 30, function()
         if ok and type(raw) == "string" then text = raw; break end
     end
     if not text then setStatus("File not found"); return end
+    text = text:gsub("^\239\187\191", "") -- strip UTF-8 BOM
     importText(text, path:match("([^/\\]+)%.%w+$") or path)
 end)
-button(tabA, "Add pasted keyframes", 0, 206, 356, 30, function()
+button(tabA, "Add pasted keyframes", 0, 206, 244, 30, function()
     if jsonBox.Text:match("^%s*$") then setStatus("Paste keyframes first"); return end
     importText(jsonBox.Text)
 end)
-label(tabA, "Big exports (over ~100k characters) can't be pasted: save the file in your executor's workspace folder, type its name above and press Load file (or put it in Reanimlol/keyframes/ to load automatically). Supported: Lua tables of Time / Data / CFrame.new(...) per part, and the JSON pose format {\"duration\":1,\"keys\":[{\"t\":0,\"pose\":{\"RArm\":[0,0,5]}}]}.",
+button(tabA, "Reload folder", 250, 206, 106, 30, function()
+    if not hasFS or type(listfiles) ~= "function" then setStatus("No file access"); return end
+    local loaded, failed = loadKeyframeFiles()
+    if ui.selected then ui.selected = findEntry(ui.selected.key) end
+    refreshChips(); rebuildList(true)
+    for _, s in ipairs(STATES) do refreshState(s) end -- re-resolve any state set to a file clip
+    setStatus(("Reloaded %d file%s%s"):format(loaded, loaded == 1 and "" or "s",
+        failed > 0 and (", " .. failed .. " failed") or ""))
+end)
+label(tabA, "Drop .txt / .lua / .json keyframe files into Reanimlol/keyframes/ (subfolders become sub-categories), then press Reload folder: no rejoin needed. Imported clips show under Emotes > Imported. Or type a file name and press Load file. Pasting is limited to ~100k characters.",
     2, 242, 352, 74, {TextSize = 10, TextColor3 = C.dim, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top})
 
 -- Record tab ---------------------------------------------------------
