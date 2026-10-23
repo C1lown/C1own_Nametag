@@ -1,4 +1,4 @@
--- reanimlol v2
+-- reanimlol v3 (restyled GUI, animated tab / category switching, default Roblox animations suppressed)
 -- Body reanimation + emote library (categories / sub-categories / favorites / custom),
 -- walk/idle/run/jump/fall/climb/swim state overrides, speed + blend controls,
 -- R6/R15 detection, rebindable hotkeys and a keyframe recorder.
@@ -642,15 +642,40 @@ end
 -- GUI skeleton (needed by engine for status text)
 ----------------------------------------------------------------------
 local C = {
-    bg = Color3.fromRGB(19, 19, 19), field = Color3.fromRGB(32, 32, 32), sel = Color3.fromRGB(72, 72, 72),
-    text = Color3.fromRGB(235, 235, 235), dim = Color3.fromRGB(140, 140, 140),
-    accent = Color3.fromRGB(110, 110, 110), off = Color3.fromRGB(48, 48, 48), list = Color3.fromRGB(24, 24, 24),
+    bg = Color3.fromRGB(17, 17, 24), field = Color3.fromRGB(30, 30, 41), sel = Color3.fromRGB(56, 50, 98),
+    text = Color3.fromRGB(236, 236, 244), dim = Color3.fromRGB(143, 143, 164),
+    accent = Color3.fromRGB(124, 92, 255), off = Color3.fromRGB(46, 46, 62), list = Color3.fromRGB(22, 22, 31),
+    stroke = Color3.fromRGB(58, 56, 88),
 }
+local EASE = TweenInfo.new(.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+local function tween(o, props, info)
+    local t = TweenService:Create(o, info or EASE, props)
+    t:Play()
+    return t
+end
+-- setBase: changes a button's resting colour (hover effects return to this colour)
+local function setBase(o, color)
+    o:SetAttribute("base", color)
+    tween(o, {BackgroundColor3 = color})
+end
+local function hoverable(o)
+    o:SetAttribute("base", o.BackgroundColor3)
+    o.MouseEnter:Connect(function()
+        tween(o, {BackgroundColor3 = o:GetAttribute("base"):Lerp(Color3.new(1, 1, 1), .1)}, TweenInfo.new(.1))
+    end)
+    o.MouseLeave:Connect(function() tween(o, {BackgroundColor3 = o:GetAttribute("base")}, TweenInfo.new(.15)) end)
+    o.MouseButton1Down:Connect(function()
+        tween(o, {BackgroundColor3 = o:GetAttribute("base"):Lerp(Color3.new(0, 0, 0), .2)}, TweenInfo.new(.06))
+    end)
+    o.MouseButton1Up:Connect(function()
+        tween(o, {BackgroundColor3 = o:GetAttribute("base"):Lerp(Color3.new(1, 1, 1), .1)}, TweenInfo.new(.1))
+    end)
+end
 local function T(class, props, parent)
     local o = Instance.new(class)
     if o:IsA("GuiObject") then o.BorderSizePixel = 0 end
     if class == "TextLabel" or class == "TextButton" or class == "TextBox" then
-        o.Font = Enum.Font.Gotham; o.TextSize = 13; o.TextColor3 = C.text
+        o.Font = Enum.Font.GothamMedium; o.TextSize = 13; o.TextColor3 = C.text
         if class == "TextLabel" then o.BackgroundTransparency = 1 else o.BackgroundColor3 = C.field end
         if class == "TextButton" then o.AutoButtonColor = false end
         if class == "TextBox" then o.ClearTextOnFocus = false; o.PlaceholderColor3 = Color3.fromRGB(135, 135, 135) end
@@ -664,7 +689,8 @@ local function corner(o, r)
 end
 local function button(parent, text, x, y, w, h, cb)
     local b = T("TextButton", {Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(w, h), Text = text, TextSize = 12}, parent)
-    corner(b, 6)
+    corner(b, 7)
+    hoverable(b)
     if cb then b.Activated:Connect(cb) end
     return b
 end
@@ -689,8 +715,8 @@ local function switch(parent, pos, initial, onChange)
     local api = {value = initial}
     function api.set(v)
         api.value = v
-        b.BackgroundColor3 = v and C.accent or C.off
-        TweenService:Create(knob, TweenInfo.new(.12), {Position = UDim2.fromOffset(v and 25 or 3, 3)}):Play()
+        tween(b, {BackgroundColor3 = v and C.accent or C.off})
+        TweenService:Create(knob, TweenInfo.new(.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Position = UDim2.fromOffset(v and 25 or 3, 3)}):Play()
     end
     b.Activated:Connect(function()
         api.set(not api.value)
@@ -737,7 +763,22 @@ gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = player:WaitForChild("PlayerGui")
 local panel = T("Frame", {Size = UDim2.fromOffset(380, 470), Position = UDim2.new(0.5, -190, 0.5, -235),
     BackgroundColor3 = C.bg, Active = true}, gui)
-corner(panel, 10)
+corner(panel, 14)
+do
+    local stroke = Instance.new("UIStroke")
+    stroke.Color, stroke.Thickness, stroke.Transparency, stroke.ApplyStrokeMode = C.stroke, 1.5, .2, Enum.ApplyStrokeMode.Border
+    stroke.Parent = panel
+    local grad = Instance.new("UIGradient")
+    grad.Rotation = 90
+    grad.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(196, 196, 214))
+    grad.Parent = panel
+end
+local panelScale = Instance.new("UIScale")
+panelScale.Scale = .9
+panelScale.Parent = panel
+panel.BackgroundTransparency = 1
+tween(panelScale, {Scale = 1}, TweenInfo.new(.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out))
+tween(panel, {BackgroundTransparency = 0}, TweenInfo.new(.3))
 local dragBar = T("Frame", {Size = UDim2.new(1, 0, 0, 38), BackgroundTransparency = 1}, panel)
 local title = label(dragBar, "reanimlol", 16, 0, 190, 38, {Font = Enum.Font.GothamMedium, TextSize = 16,
     TextTruncate = Enum.TextTruncate.AtEnd})
@@ -1098,17 +1139,48 @@ end
 -- GUI: tabs
 ----------------------------------------------------------------------
 local tabNames = {"Emotes", "States", "Add", "Record", "Settings"}
-local tabFrames, tabButtons = {}, {}
+local tabFrames, tabButtons, tabOrder = {}, {}, {}
+local TAB_X, TAB_Y = 12, 74
+T("Frame", {Position = UDim2.fromOffset(12, 71), Size = UDim2.new(1, -24, 0, 1), BackgroundColor3 = C.stroke, BackgroundTransparency = .4}, panel)
+local indicator = T("Frame", {Position = UDim2.fromOffset(12, 68), Size = UDim2.fromOffset(68, 3), BackgroundColor3 = C.accent}, panel)
+corner(indicator, 2)
+local currentTab, tabToken = "Emotes", 0
 local function showTab(name)
-    for n, f in pairs(tabFrames) do f.Visible = (n == name) end
-    for n, b in pairs(tabButtons) do b.BackgroundColor3 = (n == name) and C.sel or C.field end
+    local first = (tabFrames[name].Visible == false and name == currentTab)
+    tabToken += 1
+    local token = tabToken
+    local dir = (tabOrder[name] >= tabOrder[currentTab]) and 1 or -1
+    local old = currentTab
+    currentTab = name
+    for n, b in pairs(tabButtons) do
+        setBase(b, n == name and C.sel or C.field)
+        tween(b, {TextColor3 = n == name and C.text or C.dim})
+    end
+    tween(indicator, {Position = UDim2.fromOffset(12 + (tabOrder[name] - 1) * 72, 68)}, TweenInfo.new(.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out))
+    for n, f in pairs(tabFrames) do
+        if n == name then
+            f.Visible = true
+            if old ~= name or first then
+                f.Position = UDim2.fromOffset(TAB_X + 22 * dir, TAB_Y)
+                f.GroupTransparency = 1
+                tween(f, {Position = UDim2.fromOffset(TAB_X, TAB_Y), GroupTransparency = 0}, TweenInfo.new(.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out))
+            end
+        elseif f.Visible then
+            tween(f, {Position = UDim2.fromOffset(TAB_X - 22 * dir, TAB_Y), GroupTransparency = 1}, TweenInfo.new(.14, Enum.EasingStyle.Quad, Enum.EasingDirection.In))
+            task.delay(.15, function()
+                if token == tabToken and not destroyed then f.Visible = false end
+            end)
+        end
+    end
 end
 for i, name in ipairs(tabNames) do
-    tabFrames[name] = T("Frame", {Position = UDim2.fromOffset(12, 74), Size = UDim2.fromOffset(356, 318),
+    tabOrder[name] = i
+    tabFrames[name] = T("CanvasGroup", {Position = UDim2.fromOffset(TAB_X, TAB_Y), Size = UDim2.fromOffset(356, 318),
         BackgroundTransparency = 1, Visible = (i == 1)}, panel)
-    tabButtons[name] = button(panel, name, 12 + (i - 1) * 72, 42, 68, 26, function() showTab(name) end)
+    tabButtons[name] = button(panel, name, 12 + (i - 1) * 72, 40, 68, 26, function() showTab(name) end)
+    tabButtons[name].TextColor3 = (i == 1) and C.text or C.dim
+    if i == 1 then setBase(tabButtons[name], C.sel) end
 end
-showTab("Emotes")
 
 local ui = {main = "All", sub = "All", selected = nil, rows = {}, bindBtn = {}}
 local rebuildList, refreshChips, refreshStateRows
@@ -1126,9 +1198,14 @@ local function clearButtons(row)
 end
 local function chip(row, text, active, order, cb)
     local b = T("TextButton", {AutomaticSize = Enum.AutomaticSize.X, Size = UDim2.fromOffset(0, 24), Text = text,
-        TextSize = 12, LayoutOrder = order, BackgroundColor3 = active and C.sel or C.field}, row)
+        TextSize = 12, LayoutOrder = order, BackgroundColor3 = C.field, TextColor3 = active and C.text or C.dim}, row)
     T("UIPadding", {PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10)}, b)
-    corner(b, 6)
+    corner(b, 12)
+    hoverable(b)
+    if active then
+        -- selected chip fades from the idle colour to the accent colour
+        task.defer(function() if b.Parent then setBase(b, C.accent); tween(b, {TextColor3 = C.text}) end end)
+    end
     b.Activated:Connect(cb)
     return b
 end
@@ -1141,7 +1218,7 @@ local subRow = chipRow(tabE, 60)
 local list = T("ScrollingFrame", {Position = UDim2.fromOffset(0, 90), Size = UDim2.fromOffset(356, 176),
     BackgroundColor3 = C.list, ScrollBarThickness = 4, CanvasSize = UDim2.new(),
     AutomaticCanvasSize = Enum.AutomaticSize.Y}, tabE)
-corner(list, 6)
+corner(list, 10)
 T("UIListLayout", {Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder}, list)
 T("UIPadding", {PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4), PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 4)}, list)
 label(tabE, "Set selected as state animation:", 2, 268, 300, 14, {TextSize = 10, TextColor3 = C.dim})
@@ -1162,7 +1239,7 @@ refreshChips = function()
     for i, m in ipairs(mains) do
         chip(mainRow, m, ui.main == m, i, function()
             ui.main, ui.sub = m, "All"
-            refreshChips(); rebuildList()
+            refreshChips(); rebuildList(true)
         end)
     end
     if ui.main ~= "All" then
@@ -1171,12 +1248,31 @@ refreshChips = function()
             if inMain(e) and not seenS[e.sub] then seenS[e.sub] = true; subs[#subs + 1] = e.sub end
         end
         for i, s in ipairs(subs) do
-            chip(subRow, s, ui.sub == s, i, function() ui.sub = s; refreshChips(); rebuildList() end)
+            chip(subRow, s, ui.sub == s, i, function() ui.sub = s; refreshChips(); rebuildList(true) end)
         end
     end
 end
 
-rebuildList = function()
+local function popIn(row, delay)
+    local sc = Instance.new("UIScale")
+    sc.Scale = .88
+    sc.Parent = row
+    row.BackgroundTransparency = 1
+    local texts = {}
+    for _, d in ipairs(row:GetDescendants()) do
+        if d:IsA("TextLabel") or d:IsA("TextButton") then texts[d] = d.TextTransparency; d.TextTransparency = 1 end
+    end
+    task.delay(delay, function()
+        if destroyed or not row.Parent then return end
+        local info = TweenInfo.new(.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+        TweenService:Create(sc, info, {Scale = 1}):Play()
+        TweenService:Create(row, info, {BackgroundTransparency = 0}):Play()
+        for d, tr in pairs(texts) do TweenService:Create(d, info, {TextTransparency = tr}):Play() end
+    end)
+end
+
+rebuildList = function(animate)
+    if animate then list.CanvasPosition = Vector2.zero end
     for _, c in ipairs(list:GetChildren()) do if c:IsA("GuiObject") then c:Destroy() end end
     ui.rows = {}
     local q = search.Text:lower()
@@ -1189,7 +1285,7 @@ rebuildList = function()
             order += 1
             local row = T("TextButton", {Size = UDim2.new(1, -6, 0, 30), Text = "", LayoutOrder = order,
                 BackgroundColor3 = (ui.selected and ui.selected.key == e.key) and C.sel or C.field}, list)
-            corner(row, 6)
+            corner(row, 8)
             local hasX = e.custom or e.recorded
             label(row, e.name, 10, 0, 260 - (hasX and 28 or 0), 30, {TextTruncate = Enum.TextTruncate.AtEnd})
             label(row, e.sub, 150, 0, 90, 30, {TextSize = 10, TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Right})
@@ -1219,10 +1315,12 @@ rebuildList = function()
                 end)
             end
             ui.rows[e.key] = row
+            hoverable(row)
+            if animate and order <= 12 then popIn(row, (order - 1) * 0.03) end
             row.Activated:Connect(function()
-                if ui.selected and ui.rows[ui.selected.key] then ui.rows[ui.selected.key].BackgroundColor3 = C.field end
+                if ui.selected and ui.rows[ui.selected.key] then setBase(ui.rows[ui.selected.key], C.field) end
                 ui.selected = e
-                row.BackgroundColor3 = C.sel
+                setBase(row, C.sel)
                 playEntry(e)
             end)
         end
@@ -1455,13 +1553,34 @@ connect(UserInputService.InputBegan, function(input, processed)
     if k == settings.keyToggle then
         if bodyReanim.Get() then turnOff() else turnOn() end
     elseif k == settings.keyGui then
-        panel.Visible = not panel.Visible
+        if panel.Visible then
+            tween(panelScale, {Scale = .9}, TweenInfo.new(.15, Enum.EasingStyle.Quad, Enum.EasingDirection.In))
+            task.delay(.15, function() if not destroyed then panel.Visible = false end end)
+        else
+            panel.Visible = true
+            panelScale.Scale = .9
+            tween(panelScale, {Scale = 1}, TweenInfo.new(.35, Enum.EasingStyle.Back, Enum.EasingDirection.Out))
+        end
     elseif k == settings.keyStop then
         stopEmote()
     end
 end)
 connect(UserInputService.JumpRequest, function()
     if settings.stopOnMove and engine.emote and engine.emote.age > 0.3 then engine.emote = nil end
+end)
+-- Keep the normal Roblox animations (Animate script, walk/idle/jump tracks) from playing on the real
+-- character while reanimated. The rig is driven only by the emote/state engine.
+connect(RunService.Heartbeat, function()
+    if destroyed or not bodyReanim.Get() then return end
+    local char = player.Character
+    if not char then return end
+    local animate = char:FindFirstChild("Animate")
+    if animate and animate:IsA("LocalScript") and not animate.Disabled then animate.Disabled = true end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    local animator = hum and hum:FindFirstChildOfClass("Animator")
+    if animator then
+        for _, track in ipairs(animator:GetPlayingAnimationTracks()) do track:Stop(0) end
+    end
 end)
 connect(player.CharacterRemoving, function()
     if bodyReanim.Get() then turnOff() end
