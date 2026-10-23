@@ -1,10 +1,10 @@
--- reanimlol v10.2 (Novoline skin): dark glass / monochrome restyle of the v10.1 GUI. Reanimation core and engine untouched.
+-- reanimlol v10.3 (Novoline skin + Novoline-style Play / Live / Tricks tabs). The reanimation core is untouched.
 -- reanimlol v10.1: v7 GUI + ragdoll-remote reanimation core (the game's own ragdoll remote breaks your joints on the server)
 -- Body reanimation core is the one from your message__14_ file (unchanged). The GUI, keyframe
 -- library, recorder and importer are from v4/v5. Saved data goes to the "Reanimlol" folder when your
 -- executor supports writefile.
 
-warn("=== reanimlol V10.2 (Novoline skin) loaded ===")
+warn("=== reanimlol V10.2 (Novoline skin, Play / Live / Tricks) loaded ===")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
@@ -300,6 +300,7 @@ local settings = {
     speed = 1, loop = true, stopOnMove = true, walkSync = true, blend = 0.15, recordRate = 20,
     noclip = true, keyToggle = "RightControl", keyGui = "RightShift", keyStop = "X",
     keySpeedDown = "Minus", keySpeedUp = "Equals", keySpeedReset = "Zero",
+    keyPause = "Y", keyRewind = "U", keyReverse = "I", keyDrive = "LeftAlt",
 }
 local data = {favorites = {}, custom = {}, states = {}, binds = {}, settings = settings}
 
@@ -868,6 +869,14 @@ local closeBtn = button(panel, "✕", 336, 7, 28, 24, function() if shared.Reani
 local engine = {motors = {}, stateAnims = {}, gen = {}, token = 0, fadeT = 1, snapshot = {}, baked = {}, parts = {}, collide = {}}
 local rec = {on = false, clip = nil, t = 0, acc = 0, frames = 0}
 local updateRecUI
+-- transport state (Play tab), live limb control (Live tab) and tricks (Tricks tab); logic is filled in further down
+engine.paused, engine.dir = false, 1
+local live = {on = false, drive = false, group = "rarm", seg = 1, sens = 1, keep = false, mirror = false, pole = false,
+    pose = {}, cur = {}, ext = {}, sign = {}}
+local tricks = {head = {on = false, mode = "camera", free = false, yaw = 0, pitch = 0},
+    torso = {on = false, strength = 1, free = false, yaw = 0, pitch = 0},
+    fly = {on = false, speed = 40}}
+local liveStep, tricksStep, liveRefresh, playRefresh, tricksStop
 
 local NO_STATE = {name = "None"}
 local EMPTY_CLIP = {curves = {}, duration = 1, looped = true} -- rest pose when no clip is assigned
@@ -975,13 +984,19 @@ local function engineStep(dt)
             engine.current = cur
         end
         local dur = desired.duration
-        cur.t += dt * settings.speed * rate
+        if not engine.paused then cur.t += dt * settings.speed * rate * engine.dir end
         local t = cur.t
         if loop then
             t = t % dur
+            cur.t = t
         elseif t >= dur then
             t = dur
-            if e and not desired.hold then engine.emote = nil end
+            cur.t = dur
+            if e and not desired.hold and engine.dir > 0 and not engine.paused then engine.emote = nil end
+        elseif t <= 0 then
+            t = 0
+            cur.t = 0
+            if e and engine.dir < 0 and not engine.paused then engine.emote = nil end
         end
         engine.fadeT += dt
         local alpha = settings.blend > 0 and math.min(engine.fadeT / settings.blend, 1) or 1
@@ -991,6 +1006,14 @@ local function engineStep(dt)
             if alpha < 1 then target = (engine.snapshot[m] or target):Lerp(target, alpha) end
             m.Transform = target
         end
+    end
+    if tricksStep then
+        local ok, err = pcall(tricksStep, dt)
+        if not ok and not engine.warnedTricks then engine.warnedTricks = true; warn("reanimlol tricks: " .. tostring(err)) end
+    end
+    if liveStep then
+        local ok, err = pcall(liveStep, dt)
+        if not ok and not engine.warnedLive then engine.warnedLive = true; warn("reanimlol live: " .. tostring(err)) end
     end
     if rec.on then
         rec.t += dt
@@ -1039,6 +1062,11 @@ local function engineStop()
     engine.motors, engine.stateAnims = {}, {}
     engine.token += 1
     rec.on = false
+    if tricksStop then tricksStop() end
+    live.on, live.drive, live.pose, live.cur, live.ext = false, false, {}, {}, {}
+    engine.paused, engine.dir = false, 1
+    if liveRefresh then liveRefresh() end
+    if playRefresh then playRefresh() end
     if updateRecUI and not destroyed then updateRecUI() end
 end
 
@@ -1095,6 +1123,8 @@ local function startEmote(anim, name, key)
     for n in pairs(engine.motors) do if anim.curves[n] then matched += 1 end end
     if matched == 0 then setStatus("Animation doesn't match rig"); return false end
     engine.emote = {anim = anim, loop = settings.loop and not anim.hold, age = 0, name = name, key = key}
+    engine.paused, engine.dir = false, 1
+    if playRefresh then playRefresh() end
     setStatus(name)
     return true
 end
@@ -1210,13 +1240,17 @@ loadKeyframeFiles()
 ----------------------------------------------------------------------
 -- GUI: tabs
 ----------------------------------------------------------------------
-local tabNames = {"Emotes", "States", "Import", "Record", "Settings"}
+local tabNames = {"Emotes", "States", "Play", "Live", "Tricks", "Import", "Record", "Settings"}
 local tabFrames, tabButtons, tabOrder = {}, {}, {}
 local TAB_X, TAB_Y = 12, 74
 T("Frame", {Position = UDim2.fromOffset(12, 71), Size = UDim2.new(1, -24, 0, 1), BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = .92}, panel)
 -- Novoline marks the active tab with a light pill instead of an underline; the slider stays as a hidden no-op
 local indicator = T("Frame", {Position = UDim2.fromOffset(12, 68), Size = UDim2.fromOffset(68, 3), BackgroundColor3 = C.accent, BackgroundTransparency = 1}, panel)
 corner(indicator, 2)
+-- 8 tabs don't fit in one row, so the strip scrolls sideways (drag / mouse wheel / click scrolls the tab into view)
+local tabStrip = T("ScrollingFrame", {Position = UDim2.fromOffset(12, 40), Size = UDim2.fromOffset(356, 26),
+    BackgroundTransparency = 1, ScrollBarThickness = 0, CanvasSize = UDim2.fromOffset(#tabNames * 72, 0),
+    ScrollingDirection = Enum.ScrollingDirection.X, ClipsDescendants = true}, panel)
 local currentTab, tabToken = "Emotes", 0
 local function showTab(name)
     local first = (tabFrames[name].Visible == false and name == currentTab)
@@ -1225,6 +1259,10 @@ local function showTab(name)
     local dir = (tabOrder[name] >= tabOrder[currentTab]) and 1 or -1
     local old = currentTab
     currentTab = name
+    do
+        local maxX = math.max(#tabNames * 72 - 4 - 356, 0)
+        tween(tabStrip, {CanvasPosition = Vector2.new(math.clamp((tabOrder[name] - 1) * 72 - 144, 0, maxX), 0)}, TweenInfo.new(.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out))
+    end
     for n, b in pairs(tabButtons) do
         setBase(b, n == name and C.accent or C.field)
         tween(b, {TextColor3 = n == name and C.ink or C.dim})
@@ -1250,7 +1288,7 @@ for i, name in ipairs(tabNames) do
     tabOrder[name] = i
     tabFrames[name] = T("CanvasGroup", {Position = UDim2.fromOffset(TAB_X, TAB_Y), Size = UDim2.fromOffset(356, 318),
         BackgroundTransparency = 1, Visible = (i == 1)}, panel)
-    tabButtons[name] = button(panel, name, 12 + (i - 1) * 72, 40, 68, 26, function() showTab(name) end)
+    tabButtons[name] = button(tabStrip, name, (i - 1) * 72, 0, 68, 26, function() showTab(name) end)
     tabButtons[name].TextColor3 = (i == 1) and C.ink or C.dim
     corner(tabButtons[name], 13)
     if i == 1 then setBase(tabButtons[name], C.accent) end
@@ -1787,6 +1825,532 @@ button(tabG, "Reset saved data", 0, 286, 356, 28, function()
     setStatus("Data reset")
 end)
 
+----------------------------------------------------------------------
+-- Play / Live / Tricks tabs (Novoline-style transport, live limb control and body tricks)
+----------------------------------------------------------------------
+local ctl = {}
+local function toggleRow(parent, text, y, initial, cb)
+    label(parent, text, 4, y, 290, 28)
+    return switch(parent, UDim2.fromOffset(306, y + 2), initial, cb)
+end
+local function sliderRow(parent, text, y, min, max, value, fmt, cb)
+    label(parent, text, 4, y, 60, 22, {TextColor3 = C.dim, TextSize = 12})
+    local val = label(parent, string.format(fmt, value), 300, y, 56, 22, {TextColor3 = C.dim, TextSize = 12,
+        TextXAlignment = Enum.TextXAlignment.Right})
+    local sl = slider(parent, 64, y + 4, 228, min, max, value, function(v)
+        val.Text = string.format(fmt, v)
+        cb(v)
+    end)
+    sl.label = val
+    return sl
+end
+local function bindButton(parent, text, key, y)
+    label(parent, text, 4, y, 220, 28)
+    local b = button(parent, settings[key], 236, y, 120, 28, function()
+        ui.binding = key
+        ui.bindBtn[key].Text = "press key..."
+    end)
+    ui.bindBtn[key] = b
+end
+local function setSelected(b, on)
+    setBase(b, on and C.accent or C.field)
+    tween(b, {TextColor3 = on and C.ink or C.dim})
+end
+local mouseRay = RaycastParams.new()
+mouseRay.FilterType = Enum.RaycastFilterType.Exclude
+mouseRay.IgnoreWater = true
+-- world point under the mouse (ignores your own bodies); falls back to a point 60 studs along the ray
+local function hitPoint()
+    local cam = workspace.CurrentCamera
+    if not cam then return nil end
+    local mp = UserInputService:GetMouseLocation()
+    local ray = cam:ViewportPointToRay(mp.X, mp.Y)
+    local ignore = {}
+    if engine.copy then ignore[#ignore + 1] = engine.copy end
+    if player.Character then ignore[#ignore + 1] = player.Character end
+    mouseRay.FilterDescendantsInstances = ignore
+    local hit = workspace:Raycast(ray.Origin, ray.Direction * 400, mouseRay)
+    return hit and hit.Position or ray.Origin + ray.Direction * 60
+end
+
+-- Play tab: transport controls ----------------------------------------
+do
+    local tabP = tabFrames.Play
+    local playName = label(tabP, "Nothing playing", 2, 0, 230, 24, {Font = Enum.Font.GothamBold,
+        TextTruncate = Enum.TextTruncate.AtEnd})
+    local playTime = label(tabP, "0.00 / 0.00s", 232, 0, 124, 24, {TextColor3 = C.dim, TextSize = 12,
+        TextXAlignment = Enum.TextXAlignment.Right})
+    local lastScrub = 0
+    local scrub = slider(tabP, 0, 32, 356, 0, 1, 0, function(v)
+        local cur = engine.current
+        if not cur then return end
+        lastScrub = os.clock()
+        engine.paused = true
+        cur.t = v * cur.anim.duration
+        playRefresh()
+    end)
+    local function step(delta)
+        local cur = engine.current
+        if not cur then return end
+        engine.paused = true
+        cur.t = math.clamp(cur.t + delta, 0, cur.anim.duration)
+        lastScrub = 0
+        playRefresh()
+    end
+    ctl.togglePause = function()
+        if not engine.current then return end
+        engine.paused = not engine.paused
+        playRefresh()
+    end
+    ctl.restart = function()
+        local cur = engine.current
+        if engine.emote and cur then
+            cur.t = engine.dir < 0 and cur.anim.duration or 0
+        elseif ui.lastEntry then
+            playEntry(ui.lastEntry) -- the emote already finished: play it again
+        elseif cur then
+            cur.t = 0
+        end
+        engine.paused = false
+        playRefresh()
+    end
+    ctl.reverse = function()
+        engine.dir = -engine.dir
+        playRefresh()
+    end
+    local W, GAP = 66, 6.5
+    button(tabP, "⏮ Restart", 0, 58, W, 28, ctl.restart)
+    local pauseBtn = button(tabP, "⏸ Pause", (W + GAP), 58, W, 28, ctl.togglePause)
+    local revBtn = button(tabP, "⇄ Reverse", (W + GAP) * 2, 58, W, 28, ctl.reverse)
+    button(tabP, "◀ Step", (W + GAP) * 3, 58, W, 28, function() step(-0.05) end)
+    button(tabP, "Step ▶", (W + GAP) * 4, 58, W, 28, function() step(0.05) end)
+    for _, b in ipairs({pauseBtn, revBtn}) do b.TextSize = 11 end
+    playRefresh = function()
+        if destroyed then return end
+        pauseBtn.Text = engine.paused and "▶ Play" or "⏸ Pause"
+        setSelected(pauseBtn, engine.paused)
+        tween(pauseBtn, {TextColor3 = engine.paused and C.ink or C.text})
+        setSelected(revBtn, engine.dir < 0)
+        tween(revBtn, {TextColor3 = engine.dir < 0 and C.ink or C.text})
+    end
+    playRefresh()
+    label(tabP, "Keybinds  (Esc cancels a rebind)", 4, 100, 350, 16, {TextSize = 11, TextColor3 = C.dim})
+    bindButton(tabP, "Pause / resume", "keyPause", 122)
+    bindButton(tabP, "Restart", "keyRewind", 156)
+    bindButton(tabP, "Reverse", "keyReverse", 190)
+    label(tabP, "Works on emotes and state animations. Dragging the bar pauses and scrubs; the speed slider below still applies. Reverse plays the clip backwards.",
+        4, 228, 350, 60, {TextSize = 10, TextColor3 = C.dim, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top})
+    connect(RunService.RenderStepped, function()
+        if destroyed or currentTab ~= "Play" then return end
+        local cur = engine.current
+        if cur and engine.copy then
+            local dur = math.max(cur.anim.duration, 0.001)
+            playName.Text = engine.emote and engine.emote.name or "State animation"
+            playTime.Text = string.format("%.2f / %.2fs", math.clamp(cur.t, 0, dur), dur)
+            if os.clock() - lastScrub > 0.25 then scrub.set(math.clamp(cur.t / dur, 0, 1), false) end
+        else
+            playName.Text, playTime.Text = "Nothing playing", "0.00 / 0.00s"
+        end
+    end)
+    local origPlay = playEntry
+    playEntry = function(entry)
+        ui.lastEntry = entry
+        return origPlay(entry)
+    end
+end
+
+-- Live tab: aim limbs at the mouse --------------------------------------
+do
+    local tabL = tabFrames.Live
+    local GROUPS = {{"larm", "L Arm"}, {"head", "Head"}, {"rarm", "R Arm"}, {"lleg", "L Leg"}, {"torso", "Torso"}, {"rleg", "R Leg"}}
+    local PARTS = {
+        R15 = {head = {{"Head", "Head"}}, torso = {{"UpperTorso", "Upper"}, {"LowerTorso", "Lower"}},
+            larm = {{"LeftUpperArm", "Upper"}, {"LeftLowerArm", "Lower"}, {"LeftHand", "Hand"}},
+            rarm = {{"RightUpperArm", "Upper"}, {"RightLowerArm", "Lower"}, {"RightHand", "Hand"}},
+            lleg = {{"LeftUpperLeg", "Upper"}, {"LeftLowerLeg", "Lower"}, {"LeftFoot", "Foot"}},
+            rleg = {{"RightUpperLeg", "Upper"}, {"RightLowerLeg", "Lower"}, {"RightFoot", "Foot"}}},
+        R6 = {head = {{"Head", "Head"}}, torso = {{"Torso", "Torso"}}, larm = {{"Left Arm", "Arm"}},
+            rarm = {{"Right Arm", "Arm"}}, lleg = {{"Left Leg", "Leg"}}, rleg = {{"Right Leg", "Leg"}}},
+    }
+    local LIM = {Head = {75, 45}, UpperTorso = {40, 30}, LowerTorso = {60, 25}, Torso = {60, 25}}
+    local function segs(group)
+        local set = PARTS[engine.rig or "R15"] or PARTS.R15
+        return set[group or live.group] or set.rarm
+    end
+    local function selPart()
+        local list = segs()
+        local e = list[math.clamp(live.seg, 1, #list)]
+        return e and e[1]
+    end
+    local function opposite(n)
+        if n:sub(1, 4) == "Left" then return "Right" .. n:sub(5) end
+        if n:sub(1, 5) == "Right" then return "Left" .. n:sub(6) end
+    end
+    local function flip(cf)
+        local x, y, z = cf:ToOrientation()
+        return CFrame.fromOrientation(x, -y, -z)
+    end
+    local function setPose(part, cf, ext)
+        live.pose[part] = cf
+        if ext then live.ext[part] = ext end
+        if live.mirror then
+            local o = opposite(part)
+            if o and engine.motors[o] then
+                live.pose[o] = flip(cf)
+                if ext then live.ext[o] = ext end
+            end
+        end
+    end
+    local function joint(part)
+        local m = engine.motors[part]
+        if m and m.Parent and m.Part0 and m.Part0.Parent then
+            return m.Part0.CFrame * m.C0, m.C1.Rotation:Inverse(), m
+        end
+    end
+    -- rotation (in the joint's own frame) that points the limb at a world position
+    local function aim(part, target)
+        local J, Rc = joint(part)
+        if not J then return nil end
+        local dW = target - J.Position
+        if dW.Magnitude < 0.1 then return nil end
+        local dl = J:VectorToObjectSpace(dW.Unit)
+        local lim = LIM[part]
+        if lim then -- head / torso: yaw + pitch with limits
+            local dp = Rc:VectorToObjectSpace(dl)
+            local rx = math.asin(math.clamp(dp.Y, -1, 1))
+            local ry = math.atan2(-dp.X, -dp.Z)
+            local ym, pm = math.rad(lim[1]), math.rad(lim[2])
+            rx = math.clamp(rx, -pm, pm)
+            if math.abs(ry) > ym then
+                ry = (live.sign[part] or (ry > 0 and 1 or -1)) * ym
+            else
+                live.sign[part] = ry >= 0 and 1 or -1
+            end
+            return Rc * CFrame.fromOrientation(rx, ry, 0) * Rc:Inverse()
+        end
+        local from = Rc:VectorToWorldSpace(Vector3.new(0, -1, 0)) -- limbs hang along -Y
+        local dot = math.clamp(from:Dot(dl), -1, 1)
+        local axis = from:Cross(dl)
+        if axis.Magnitude < 1e-4 then
+            if dot > 0 then return CFrame.identity end
+            axis = Rc:VectorToWorldSpace(Vector3.new(1, 0, 0))
+        end
+        return CFrame.fromAxisAngle(axis.Unit, math.acos(dot))
+    end
+
+    liveStep = function(dt)
+        if not live.on then return end
+        local cam = workspace.CurrentCamera
+        if live.pole and cam then
+            -- "pole": both arms stretched straight out along the camera direction
+            for _, g in ipairs({"larm", "rarm"}) do
+                local list = segs(g)
+                local part = list[1][1]
+                local J = joint(part)
+                if J then
+                    local cf = aim(part, J.Position + cam.CFrame.LookVector * 50)
+                    if cf then
+                        live.pose[part] = cf
+                        live.ext[part] = math.max(live.ext[part] or 0, 6)
+                    end
+                end
+                for i = 2, #list do live.pose[list[i][1]] = CFrame.identity end
+            end
+        elseif live.drive then
+            local part = selPart()
+            local target = part and hitPoint()
+            if target then
+                local cf = aim(part, target)
+                if cf then setPose(part, cf) end
+            end
+        end
+        local k = 1 - math.exp(-dt * 14 * live.sens)
+        for part, target in pairs(live.pose) do
+            local m = engine.motors[part]
+            if m and m.Parent then
+                local cur = (live.cur[part] or CFrame.identity):Lerp(target, k)
+                live.cur[part] = cur
+                local out = cur
+                local ext = live.ext[part] or 0
+                if ext > 0 then -- reach / stretch: slide the limb out along its own axis
+                    local axis = m.C1.Rotation:Inverse():VectorToWorldSpace(Vector3.new(0, -1, 0))
+                    out = CFrame.new(cur:VectorToWorldSpace(axis) * ext) * cur
+                end
+                m.Transform = live.keep and (m.Transform * out) or out
+            end
+        end
+    end
+
+    -- UI
+    label(tabL, "Live limb control", 4, 0, 250, 28)
+    local liveSwitch
+    local groupBtns = {}
+    local segRow = T("Frame", {Position = UDim2.fromOffset(0, 100), Size = UDim2.fromOffset(356, 24), BackgroundTransparency = 1}, tabL)
+    T("UIListLayout", {FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder}, segRow)
+    local segBtns = {}
+    local reachSlider
+    local function syncReach()
+        local part = selPart()
+        local v = part and live.ext[part] or 0
+        reachSlider.set(v, false)
+        reachSlider.label.Text = string.format("%.1f", v)
+    end
+    local function refreshGroups()
+        for id, b in pairs(groupBtns) do setSelected(b, id == live.group) end
+    end
+    local function rebuildSegs()
+        for _, b in ipairs(segBtns) do b:Destroy() end
+        segBtns = {}
+        for i, e in ipairs(segs()) do
+            local b = T("TextButton", {Size = UDim2.fromOffset(84, 24), Text = e[2], TextSize = 12, LayoutOrder = i}, segRow)
+            corner(b, 12)
+            hoverable(b)
+            setSelected(b, i == live.seg)
+            b.Activated:Connect(function()
+                live.seg = i
+                rebuildSegs()
+                syncReach()
+            end)
+            segBtns[#segBtns + 1] = b
+        end
+    end
+    for i, g in ipairs(GROUPS) do
+        groupBtns[g[1]] = button(tabL, g[2], ((i - 1) % 3) * 121, 34 + math.floor((i - 1) / 3) * 32, 114, 28, function()
+            live.group, live.seg = g[1], 1
+            refreshGroups(); rebuildSegs(); syncReach()
+        end)
+    end
+    local hint = label(tabL, "", 2, 126, 230, 24, {TextSize = 10, TextColor3 = C.dim})
+    local driveBtn = button(tabL, settings.keyDrive, 236, 126, 120, 24, function()
+        ui.binding = "keyDrive"
+        ui.bindBtn.keyDrive.Text = "press key..."
+    end)
+    driveBtn.TextSize = 11
+    ui.bindBtn.keyDrive = driveBtn
+    sliderRow(tabL, "Follow", 156, 0.2, 3, live.sens, "%.1fx", function(v) live.sens = math.floor(v * 10 + 0.5) / 10 end).set(live.sens, false)
+    reachSlider = sliderRow(tabL, "Reach", 182, 0, 14, 0, "%.1f", function(v)
+        local part = selPart()
+        if not part then return end
+        v = math.floor(v * 10 + 0.5) / 10
+        if not live.pose[part] then setPose(part, CFrame.identity, v) end
+        setPose(part, live.pose[part], v)
+    end)
+    toggleRow(tabL, "Mirror to opposite limb", 208, false, function(v) live.mirror = v end)
+    toggleRow(tabL, "Keep animation underneath", 236, false, function(v) live.keep = v end)
+    local poleSwitch = toggleRow(tabL, "Pole arms (stretch along camera)", 264, false, function(v) ctl.setPole(v) end)
+    local function clearArms()
+        for _, g in ipairs({"larm", "rarm"}) do
+            for _, e in ipairs(segs(g)) do live.pose[e[1]] = CFrame.identity; live.ext[e[1]] = 0 end
+        end
+    end
+    button(tabL, "Reset limb", 0, 292, 174, 24, function()
+        local part = selPart()
+        if not part then return end
+        for _, n in ipairs({part, live.mirror and opposite(part) or part}) do
+            live.pose[n], live.cur[n], live.ext[n] = nil, nil, nil
+        end
+        syncReach()
+    end)
+    button(tabL, "Reset all", 182, 292, 174, 24, function()
+        live.pose, live.cur, live.ext, live.pole = {}, {}, {}, false
+        liveRefresh()
+        syncReach()
+    end)
+
+    ctl.setLive = function(v)
+        if v then
+            local function on()
+                live.on = true
+                setStatus("Live control on")
+                liveRefresh()
+            end
+            if engine.copy then on() else turnOn(on) end
+        else
+            live.on, live.drive, live.pole = false, false, false
+            live.pose, live.cur = {}, {}
+            setStatus("Live control off")
+        end
+        liveRefresh()
+    end
+    ctl.setPole = function(v)
+        if v and not live.on then ctl.setLive(true) end
+        live.pole = v and true or false
+        if not v then clearArms() end
+        liveRefresh()
+    end
+    ctl.setDrive = function(on)
+        on = on and live.on or false
+        if live.drive == on then return end
+        live.drive = on
+        if on then -- segments below the selected one relax so the whole limb follows
+            local list = segs()
+            for i = live.seg + 1, #list do setPose(list[i][1], CFrame.identity) end
+        end
+    end
+    liveRefresh = function()
+        if destroyed then return end
+        if not live.on then live.pole = false end
+        liveSwitch.set(live.on)
+        poleSwitch.set(live.pole)
+        hint.Text = "Hold " .. keyLabel(settings.keyDrive) .. " to aim the selected limb at your mouse"
+        refreshGroups(); rebuildSegs(); syncReach()
+    end
+    liveSwitch = switch(tabL, UDim2.fromOffset(306, 2), false, function(v) ctl.setLive(v) end)
+    liveRefresh()
+end
+
+-- Tricks tab: head / torso tracking and flight ----------------------------
+do
+    local tabT = tabFrames.Tricks
+    local function turnToward(cur, goal, rate, dt)
+        local diff = ((goal - cur + math.pi) % (2 * math.pi)) - math.pi
+        return cur + diff * (1 - math.exp(-rate * dt))
+    end
+    local function ease(cur, goal, rate, dt) return cur + (goal - cur) * (1 - math.exp(-rate * dt)) end
+    local function aimAngles(m, dir, maxYaw, minPitch, maxPitch, free)
+        local d = m.Part0.CFrame:VectorToObjectSpace(dir)
+        local yaw = math.atan2(-d.X, -d.Z)
+        if not free and math.abs(yaw) > math.rad(115) then return 0, 0 end
+        local pitch = math.asin(math.clamp(d.Y, -1, 1))
+        return math.clamp(yaw, -maxYaw, maxYaw), math.clamp(pitch, minPitch, maxPitch)
+    end
+    -- rotation given in the parent part's axes, applied about the joint
+    local function rotateJoint(m, yaw, pitch)
+        if math.abs(yaw) + math.abs(pitch) < 0.002 then return end
+        local R = CFrame.Angles(0, yaw, 0) * CFrame.Angles(pitch, 0, 0)
+        local c0 = m.C0.Rotation
+        m.Transform = (c0:Inverse() * R * c0) * m.Transform
+    end
+
+    local function flyDrive(F, dt)
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+        local look, right = cam.CFrame.LookVector, cam.CFrame.RightVector
+        local flatLook = Vector3.new(look.X, 0, look.Z)
+        flatLook = flatLook.Magnitude > 1e-3 and flatLook.Unit or Vector3.new(0, 0, -1)
+        local flatRight = Vector3.new(right.X, 0, right.Z)
+        flatRight = flatRight.Magnitude > 1e-3 and flatRight.Unit or Vector3.new(1, 0, 0)
+        local typing = UserInputService:GetFocusedTextBox() ~= nil
+        local md = F.hum.MoveDirection
+        if md.Magnitude < 0.01 and not typing then
+            local x, z = 0, 0
+            if UserInputService:IsKeyDown(Enum.KeyCode.D) then x += 1 end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A) then x -= 1 end
+            if UserInputService:IsKeyDown(Enum.KeyCode.W) then z += 1 end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S) then z -= 1 end
+            md = flatRight * x + flatLook * z
+        end
+        local fwd, side = md:Dot(flatLook), md:Dot(flatRight)
+        local up = 0
+        if not typing then
+            if UserInputService:IsKeyDown(Enum.KeyCode.Space) or UserInputService:IsKeyDown(Enum.KeyCode.E) then up += 1 end
+            if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or UserInputService:IsKeyDown(Enum.KeyCode.Q) then up -= 1 end
+        end
+        local dir = look * fwd + right * side + Vector3.yAxis * up
+        if dir.Magnitude > 1 then dir = dir.Unit end
+        F.vel = F.vel:Lerp(dir * F.speed, 1 - math.exp(-6 * dt))
+        if F.vel.Magnitude < 0.01 then F.vel = Vector3.zero end
+        F.yaw = turnToward(F.yaw, math.atan2(-flatLook.X, -flatLook.Z), 8, dt)
+        F.cf = CFrame.new(F.cf.Position + F.vel * dt) * CFrame.Angles(0, F.yaw, 0)
+        F.root.CFrame = F.cf
+        F.root.AssemblyLinearVelocity = Vector3.zero
+        F.root.AssemblyAngularVelocity = Vector3.zero
+    end
+
+    tricksStep = function(dt)
+        local cam = workspace.CurrentCamera
+        -- head tracking
+        local H, m = tricks.head, engine.motors.Head
+        if m and m.Part0 and not live.pose.Head then
+            local gy, gp = 0, 0
+            if H.on and cam then
+                local dir = cam.CFrame.LookVector
+                if H.mode == "mouse" then
+                    local target = hitPoint()
+                    local from = m.Part1 and m.Part1.Position or m.Part0.Position
+                    if target and (target - from).Magnitude > 0.1 then dir = (target - from).Unit end
+                end
+                if H.free then gy, gp = aimAngles(m, dir, math.pi, math.rad(-85), math.rad(85), true)
+                else gy, gp = aimAngles(m, dir, math.rad(75), math.rad(-50), math.rad(60), false) end
+            end
+            H.yaw, H.pitch = turnToward(H.yaw, gy, 12, dt), ease(H.pitch, gp, 12, dt)
+            rotateJoint(m, H.yaw, H.pitch)
+        end
+        -- torso tracking
+        local B = tricks.torso
+        local tm = engine.motors[engine.rig == "R6" and "Torso" or "UpperTorso"]
+        if tm and tm.Part0 and not live.pose[tm.Part1.Name] then
+            local gy, gp = 0, 0
+            if B.on and cam then
+                local k = B.strength
+                if B.free then
+                    gy, gp = aimAngles(tm, cam.CFrame.LookVector, math.pi, math.rad(-80), math.rad(80), true)
+                else
+                    local yaw, pitch = aimAngles(tm, cam.CFrame.LookVector, math.rad(60), math.rad(-80), math.rad(80), false)
+                    gy, gp = yaw * k, math.clamp(pitch * 0.4, math.rad(-22), math.rad(22)) * k
+                end
+            end
+            B.yaw, B.pitch = turnToward(B.yaw, gy, 8, dt), ease(B.pitch, gp, 8, dt)
+            rotateJoint(tm, B.yaw, B.pitch)
+        end
+        -- flight
+        local F = tricks.fly
+        if F.on then
+            if F.root and F.root.Parent and F.hum and F.hum.Parent then flyDrive(F, dt)
+            else tricksStop() end
+        end
+    end
+
+    local flySwitch
+    tricksStop = function()
+        local F = tricks.fly
+        if F.on then
+            F.on = false
+            if F.hum and F.hum.Parent then pcall(function() F.hum.PlatformStand = F.platform == true end) end
+            if F.root and F.root.Parent then pcall(function() F.root.AssemblyLinearVelocity = Vector3.zero end) end
+        end
+        F.root, F.hum = nil, nil
+        tricks.head.yaw, tricks.head.pitch, tricks.torso.yaw, tricks.torso.pitch = 0, 0, 0, 0
+        if flySwitch then flySwitch.set(false) end
+    end
+    ctl.setFly = function(v)
+        local F = tricks.fly
+        if not v then tricksStop(); return end
+        local function go()
+            if not (engine.copy and engine.root and engine.hum) then flySwitch.set(false); return end
+            F.root, F.hum = engine.root, engine.hum
+            F.platform = F.hum.PlatformStand
+            F.cf = F.root.CFrame
+            F.vel = Vector3.zero
+            local _, ry = F.cf:ToOrientation()
+            F.yaw = ry
+            F.hum.PlatformStand = true
+            F.on = true
+            setStatus("Flying: WASD, Space up, Ctrl down")
+        end
+        if engine.copy then go() else turnOn(go) end
+    end
+
+    toggleRow(tabT, "Head follows camera", 0, false, function(v) tricks.head.on = v end)
+    label(tabT, "Head aims at", 4, 32, 120, 26, {TextColor3 = C.dim, TextSize = 12})
+    local modeBtns = {}
+    for i, mode in ipairs({"camera", "mouse"}) do
+        modeBtns[mode] = button(tabT, mode == "camera" and "Camera" or "Mouse", 130 + (i - 1) * 114, 32, 108, 26, function()
+            tricks.head.mode = mode
+            for n, b in pairs(modeBtns) do setSelected(b, n == mode) end
+        end)
+        setSelected(modeBtns[mode], tricks.head.mode == mode)
+    end
+    toggleRow(tabT, "Free look (full turn)", 64, false, function(v) tricks.head.free = v end)
+    toggleRow(tabT, "Torso follows camera", 106, false, function(v) tricks.torso.on = v end)
+    sliderRow(tabT, "Strength", 138, 0.25, 2, tricks.torso.strength, "%.2f", function(v) tricks.torso.strength = v end).set(tricks.torso.strength, false)
+    toggleRow(tabT, "Torso free look", 168, false, function(v) tricks.torso.free = v end)
+    flySwitch = toggleRow(tabT, "Fly", 210, false, function(v) ctl.setFly(v) end)
+    sliderRow(tabT, "Fly speed", 242, 10, 200, tricks.fly.speed, "%.0f", function(v) tricks.fly.speed = math.floor(v + 0.5) end).set(tricks.fly.speed, false)
+    label(tabT, "Fly: WASD along the camera, Space / E up, Ctrl / Q down. Turn it off to drop back down. Head and torso tracking add on top of whatever animation is playing.",
+        4, 270, 350, 44, {TextSize = 10, TextColor3 = C.dim, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top})
+end
+
 -- Footer (speed / stop / loop) ----------------------------------------
 label(panel, "Speed", 14, 398, 46, 22, {TextColor3 = C.dim, TextSize = 12})
 local speedVal = label(panel, string.format("%.2fx", settings.speed), 318, 398, 52, 22, {TextColor3 = C.dim, TextSize = 12})
@@ -1826,7 +2390,8 @@ connect(UserInputService.InputBegan, function(input, processed)
                 data.binds[key] = nil
                 setStatus("Bind cleared")
             elseif k == settings.keyToggle or k == settings.keyGui or k == settings.keyStop
-                or k == settings.keySpeedDown or k == settings.keySpeedUp or k == settings.keySpeedReset then
+                or k == settings.keySpeedDown or k == settings.keySpeedUp or k == settings.keySpeedReset
+                or k == settings.keyPause or k == settings.keyRewind or k == settings.keyReverse or k == settings.keyDrive then
                 setStatus(k .. " is already a hotkey")
             else
                 for other, boundKey in pairs(data.binds) do if boundKey == k then data.binds[other] = nil end end
@@ -1847,6 +2412,7 @@ connect(UserInputService.InputBegan, function(input, processed)
             if input.KeyCode ~= Enum.KeyCode.Escape then settings[ui.binding] = input.KeyCode.Name; saveSoon() end
             ui.bindBtn[ui.binding].Text = settings[ui.binding]
             ui.binding = nil
+            if liveRefresh then liveRefresh() end
         end
         return
     end
@@ -1872,6 +2438,14 @@ connect(UserInputService.InputBegan, function(input, processed)
         setSpeed(settings.speed + 0.1)
     elseif k == settings.keySpeedReset then
         setSpeed(1)
+    elseif k == settings.keyPause then
+        ctl.togglePause()
+    elseif k == settings.keyRewind then
+        ctl.restart()
+    elseif k == settings.keyReverse then
+        ctl.reverse()
+    elseif k == settings.keyDrive then
+        ctl.setDrive(true)
     else
         -- emote binds: press to play, press again to stop
         for entryKey, keyName in pairs(data.binds) do
@@ -1884,6 +2458,9 @@ connect(UserInputService.InputBegan, function(input, processed)
             end
         end
     end
+end)
+connect(UserInputService.InputEnded, function(input)
+    if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode.Name == settings.keyDrive then ctl.setDrive(false) end
 end)
 connect(UserInputService.JumpRequest, function()
     if settings.stopOnMove and engine.emote and engine.emote.age > 0.3 then engine.emote = nil end
