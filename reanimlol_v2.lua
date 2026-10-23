@@ -579,6 +579,41 @@ local function parseDef(t)
     return {duration = duration, loop = t.loop ~= false, hold = t.hold == true, keys = merged}
 end
 
+-- Parses raw keyframe tables exported as Lua text, e.g.
+--   return { ["name"] = { { Time = 0.0, Data = { ["Head"] = CFrame.new(...12 numbers...), ... } }, ... } }
+-- Read as plain text (nothing is executed). Each CFrame is the Motor6D Transform of that part.
+local function parseLuaClips(text)
+    local out, heads = {}, {}
+    for pos, name in text:gmatch('()%["([^"]+)"%]%s*=%s*{%s*{%s*Time') do heads[#heads + 1] = {pos = pos, name = name} end
+    if #heads == 0 then heads[1] = {pos = 1, name = "Imported"} end
+    for i, head in ipairs(heads) do
+        local body = text:sub(head.pos, heads[i + 1] and heads[i + 1].pos - 1 or #text)
+        local times = {}
+        for pos, t in body:gmatch("()Time%s*=%s*([%-%d%.eE]+)") do
+            if tonumber(t) then times[#times + 1] = {pos = pos, t = tonumber(t)} end
+        end
+        local curves, duration = {}, 0
+        for j, frame in ipairs(times) do
+            local seg = body:sub(frame.pos, times[j + 1] and times[j + 1].pos - 1 or #body)
+            for part, nums in seg:gmatch('%["([^"]+)"%]%s*=%s*CFrame%.new%(([^%)]*)%)') do
+                local c = {}
+                for n in nums:gmatch("[^,%s]+") do c[#c + 1] = tonumber(n) end
+                if #c == 12 then
+                    local curve = curves[part]
+                    if not curve then curve = {}; curves[part] = curve end
+                    curve[#curve + 1] = {time = frame.t, value = CFrame.new(table.unpack(c)), style = "Linear", direction = "InOut"}
+                end
+            end
+            duration = math.max(duration, frame.t)
+        end
+        if duration > 0 and next(curves) then
+            local rig = (curves.UpperTorso or curves.LowerTorso) and "R15" or (curves.Torso and "R6") or nil
+            out[#out + 1] = {name = head.name, clip = {curves = curves, duration = duration, looped = true, rig = rig}}
+        end
+    end
+    return out
+end
+
 -- Authoring helpers ----------------------------------------------------
 local function K(t, pose, style, dir) return {t = t, pose = pose, style = style, dir = dir} end
 -- Samples fn(angle 0..2pi) n times across one loop
@@ -757,12 +792,20 @@ for s, v in pairs(data.states) do
     if type(v) ~= "table" or not (v.lib or v.rec) then data.states[s] = nil end
 end
 for i = #data.custom, 1, -1 do
-    if type(data.custom[i]) ~= "table" or not data.custom[i].def then table.remove(data.custom, i) end
+    if type(data.custom[i]) ~= "table" or not (data.custom[i].def or data.custom[i].clipData) then table.remove(data.custom, i) end
 end
 
+local deserializeClip -- assigned in the recording helpers below
+local clipCache = setmetatable({}, {__mode = "k"})
 local function customToEntry(c)
-    return {key = "c:" .. c.cat .. "/" .. c.sub .. "/" .. c.name, name = c.name, cat = c.cat, sub = c.sub,
+    local e = {key = "c:" .. c.cat .. "/" .. c.sub .. "/" .. c.name, name = c.name, cat = c.cat, sub = c.sub,
         custom = true, src = c, def = c.def}
+    if c.clipData then
+        local clip = clipCache[c]
+        if not clip then clip = deserializeClip(c.clipData); clipCache[c] = clip end
+        e.clip = clip
+    end
+    return e
 end
 local function getEntries()
     local out = {}
@@ -1200,7 +1243,7 @@ local function serializeClip(clip, name)
     end
     return out
 end
-local function deserializeClip(tbl)
+deserializeClip = function(tbl)
     local clip = {curves = {}, duration = tbl.duration or 0, looped = true, rig = tbl.rig}
     for part, arr in pairs(tbl.curves or {}) do
         local curve = {}
@@ -1230,18 +1273,29 @@ do -- load saved recordings
     end
 end
 
-do -- load keyframe JSON files (Reanimlol/keyframes/*.json)
+do -- load keyframe files (Reanimlol/keyframes/*.json, *.lua, *.txt)
     if hasFS and type(listfiles) == "function" then
         pcall(function()
             ensureFolder(ROOT); ensureFolder(ROOT .. "/keyframes")
             for _, path in ipairs(listfiles(ROOT .. "/keyframes")) do
-                if tostring(path):sub(-5) == ".json" then
-                    local ok, tbl = pcall(function() return HttpService:JSONDecode(readfile(path)) end)
-                    local def = ok and parseDef(tbl)
-                    if def then
-                        local name = tostring(tbl.name or tostring(path):match("([^/\\]+)%.json$") or "Imported")
-                        fileClips[#fileClips + 1] = {key = "f:" .. name, name = name, cat = tostring(tbl.cat or "Imported"),
-                            sub = tostring(tbl.sub or "Files"), def = def}
+                path = tostring(path)
+                local ext = (path:match("%.(%w+)$") or ""):lower()
+                local base = path:match("([^/\\]+)%.%w+$") or "Imported"
+                local ok, raw = pcall(readfile, path)
+                if ok and type(raw) == "string" then
+                    if ext == "json" then
+                        local okJ, tbl = pcall(function() return HttpService:JSONDecode(raw) end)
+                        local def = okJ and parseDef(tbl)
+                        if def then
+                            local name = tostring(tbl.name or base)
+                            fileClips[#fileClips + 1] = {key = "f:" .. name, name = name, cat = tostring(tbl.cat or "Imported"),
+                                sub = tostring(tbl.sub or "Files"), def = def}
+                        end
+                    elseif ext == "lua" or ext == "txt" then
+                        for _, item in ipairs(parseLuaClips(raw)) do
+                            local name = item.name == "Imported" and base or item.name
+                            fileClips[#fileClips + 1] = {key = "f:" .. name, name = name, cat = "Imported", sub = "Files", clip = item.clip}
+                        end
                     end
                 end
             end
@@ -1497,32 +1551,66 @@ end
 
 -- Import tab ----------------------------------------------------------
 local tabA = tabFrames.Import
-local nameBox = box(tabA, "Name", 0, 0, 356, 30)
+local nameBox = box(tabA, "Name (optional)", 0, 0, 356, 30)
 local catBox = box(tabA, "Category", 0, 36, 172, 30)
 local subBox = box(tabA, "Sub-category", 184, 36, 172, 30)
 catBox.Text, subBox.Text = "Custom", "General"
-local jsonBox = box(tabA, "Paste keyframe JSON", 0, 72, 356, 130)
+local fileBox = box(tabA, "Workspace file (.lua / .json)", 0, 72, 244, 30)
+local jsonBox = box(tabA, "...or paste keyframes here", 0, 108, 356, 92)
 jsonBox.MultiLine, jsonBox.TextWrapped, jsonBox.TextYAlignment = true, true, Enum.TextYAlignment.Top
 jsonBox.TextSize = 11
 T("UIPadding", {PaddingTop = UDim.new(0, 8), PaddingRight = UDim.new(0, 8)}, jsonBox)
-button(tabA, "Add to library", 0, 208, 356, 30, function()
-    local ok, decoded = pcall(function() return HttpService:JSONDecode(jsonBox.Text) end)
-    if not ok or type(decoded) ~= "table" then setStatus("Keyframe JSON is invalid"); return end
-    local def, err = parseDef(decoded)
-    if not def then setStatus(err or "Bad keyframes"); return end
-    local function trim(str, d) str = str:match("^%s*(.-)%s*$"); return str ~= "" and str or d end
-    local entry = {name = trim(nameBox.Text, tostring(decoded.name or "Imported " .. (#data.custom + 1))),
-        cat = trim(catBox.Text, "Custom"), sub = trim(subBox.Text, "General"), def = def}
-    table.insert(data.custom, entry)
+
+local function trim(str, d) str = str:match("^%s*(.-)%s*$"); return str ~= "" and str or d end
+
+local function importText(text, fallbackName)
+    local cat, sub = trim(catBox.Text, "Custom"), trim(subBox.Text, "General")
+    local typed = trim(nameBox.Text, nil)
+    local entries = {}
+    if text:find("CFrame.new", 1, true) and text:find("Time%s*=") then
+        local found = parseLuaClips(text)
+        if #found == 0 then setStatus("No keyframes found"); return end
+        for _, item in ipairs(found) do
+            local name = (#found == 1 and typed) or item.name
+            if name == "Imported" then name = fallbackName or name end
+            item.clip.rig = item.clip.rig or playerRig()
+            entries[#entries + 1] = {name = name, cat = cat, sub = sub, clipData = serializeClip(item.clip, name)}
+        end
+    else
+        local ok, decoded = pcall(function() return HttpService:JSONDecode(text) end)
+        if not ok or type(decoded) ~= "table" then setStatus("Not valid keyframe data"); return end
+        local def, err = parseDef(decoded)
+        if not def then setStatus(err or "Bad keyframes"); return end
+        entries[1] = {name = typed or tostring(decoded.name or fallbackName or ("Imported " .. (#data.custom + 1))),
+            cat = cat, sub = sub, def = def}
+    end
+    for _, e in ipairs(entries) do table.insert(data.custom, e) end
     saveData()
-    nameBox.Text, jsonBox.Text = "", ""
-    ui.main, ui.sub = entry.cat, "All"
+    nameBox.Text, jsonBox.Text, fileBox.Text = "", "", ""
+    ui.main, ui.sub = cat, "All"
     refreshChips(); rebuildList(true)
-    setStatus("Added " .. entry.name)
+    setStatus("Added " .. (#entries == 1 and entries[1].name or (#entries .. " clips")))
     showTab("Emotes")
+end
+
+button(tabA, "Load file", 250, 72, 106, 30, function()
+    if not hasFS then setStatus("No file access"); return end
+    local path = trim(fileBox.Text, "")
+    if path == "" then setStatus("Type a file name first"); return end
+    local text
+    for _, candidate in ipairs({path, ROOT .. "/keyframes/" .. path, ROOT .. "/" .. path}) do
+        local ok, raw = pcall(function() if isfile(candidate) then return readfile(candidate) end end)
+        if ok and type(raw) == "string" then text = raw; break end
+    end
+    if not text then setStatus("File not found"); return end
+    importText(text, path:match("([^/\\]+)%.%w+$") or path)
 end)
-label(tabA, "Keyframe format: {\"duration\":1,\"loop\":false,\"keys\":[{\"t\":0,\"pose\":{\"RArm\":[0,0,5]}},{\"t\":0.5,\"pose\":{\"RArm\":[0,0,120]}}]}. Joints: Hips Torso Head LArm RArm LForearm RForearm LLeg RLeg LShin RShin. Values are [x,y,z] degrees, optionally + [dx,dy,dz] studs. One clip works on R6 and R15. Add \"hold\":true to freeze on the last pose. Files in Reanimlol/keyframes/ load automatically.",
-    2, 244, 352, 72, {TextSize = 10, TextColor3 = C.dim, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top})
+button(tabA, "Add pasted keyframes", 0, 206, 356, 30, function()
+    if jsonBox.Text:match("^%s*$") then setStatus("Paste keyframes first"); return end
+    importText(jsonBox.Text)
+end)
+label(tabA, "Big exports: save the file in your executor's workspace folder, type its name above and press Load file (or put it in Reanimlol/keyframes/ to load automatically). Supported: Lua tables of Time / Data / CFrame.new(...) per part, and the JSON pose format {\"duration\":1,\"keys\":[{\"t\":0,\"pose\":{\"RArm\":[0,0,5]}}]}.",
+    2, 242, 352, 74, {TextSize = 10, TextColor3 = C.dim, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top})
 
 -- Record tab ---------------------------------------------------------
 local tabR = tabFrames.Record
