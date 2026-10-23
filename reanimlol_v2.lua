@@ -1,18 +1,21 @@
--- reanimlol v4: keyframe-only
+-- reanimlol v5: keyframe-only + replication fixes
 -- Body reanimation driven purely by keyframes. No Roblox animation assets, IDs or AnimationTracks are
 -- used: every clip is a list of timed poses (built in, recorded, or imported as JSON) that the engine
 -- samples itself and writes to the rig's Motor6D.Transform values. Works on R6 and R15.
 -- Enable the toggle (or press the hotkey) first. Saved data (favorites, imported clips, state picks,
 -- settings, recordings) is written to the "Reanimlol" folder when your executor supports writefile.
 --
--- Import fixes in this build:
+-- v5 changes (others couldn't see animations):
+--   * simulation radius is raised on start and every physics step (sethiddenproperty / setsimulationradius)
+--   * HumanoidRootPart keeps normal physical properties (zero-density root hurt network ownership)
+--   * followers are driven in PreSimulation, PostSimulation AND Heartbeat so the last write wins
+--   * new Settings toggle "Boost replication" and a network-owner check that reports unowned parts
+--     in the title bar ("N parts not owned") so you can see if the server accepted your physics
+--
+-- Import (unchanged from v4):
 --   * keyframe files are detected by CONTENT (Lua tables with Time / CFrame.new vs JSON), not by extension
---   * .txt files are supported (a Lua export or JSON pose file saved as .txt loads fine)
---   * drop files in Reanimlol/keyframes/ (subfolders become sub-categories) and press "Reload folder"
---     on the Import tab to pick up new / edited / deleted files without rejoining
+--   * .txt files are supported; drop files in Reanimlol/keyframes/ and press "Reload folder"
 --   * "Load file" also tries .lua / .json / .txt when you type a name without an extension
---   * the invalid-data message now tells you how much text arrived (pasting very large files fails
---     because a text box can't hold them: use Load file instead)
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -26,7 +29,34 @@ local shared = getgenv and getgenv() or _G
 if type(shared.ReanimlolCleanup) == "function" then pcall(shared.ReanimlolCleanup) end
 
 ----------------------------------------------------------------------
--- CORE: body reanimation (unchanged logic from v1)
+-- Replication helpers (v5)
+----------------------------------------------------------------------
+local replicateEnabled = true -- mirrored from settings.replicate once settings load
+local function boostSimulation()
+    if not replicateEnabled then return end
+    pcall(function()
+        if sethiddenproperty then
+            sethiddenproperty(player, "SimulationRadius", 1e9)
+            pcall(sethiddenproperty, player, "MaximumSimulationRadius", 1e9)
+        elseif setsimulationradius then
+            setsimulationradius(1e9, 1e9)
+        end
+    end)
+end
+local function countUnowned(character)
+    if type(isnetworkowner) ~= "function" or not character then return nil end
+    local n = 0
+    for _, p in ipairs(character:GetChildren()) do
+        if p:IsA("BasePart") then
+            local ok, owned = pcall(isnetworkowner, p)
+            if ok and not owned then n += 1 end
+        end
+    end
+    return n
+end
+
+----------------------------------------------------------------------
+-- CORE: body reanimation
 ----------------------------------------------------------------------
 local bodyReanim = (function()
 local state = {
@@ -111,8 +141,12 @@ local function sourceObject(session, object)
       remember(session, object, property)
     end
     session.parts[object] = true
-    object.CanCollide, object.Massless, object.Transparency = false, true, 1
-    object.CustomPhysicalProperties = PhysicalProperties.new(0.001, 0, 0, 0, 0)
+    object.CanCollide, object.Transparency = false, 1
+    -- v5: the root keeps normal mass/density so the server keeps trusting the assembly's physics
+    if object ~= session.root then
+      object.Massless = true
+      object.CustomPhysicalProperties = PhysicalProperties.new(0.001, 0, 0, 0, 0)
+    end
   elseif object:IsA("Decal") then
     remember(session, object, "Transparency")
     object.Transparency = 1
@@ -257,6 +291,7 @@ local function startReanimation()
     }
     state.rig.session = session
     state.real_chars[player] = character
+    boostSimulation()
     local copy = cloneCharacter(character)
     assert(typeof(copy) == "Instance", tostring(copy))
     session.copy = copy
@@ -364,6 +399,7 @@ local function startReanimation()
     end)
     listen("step", state.services.run_service.PreSimulation, function()
       if not validRig() or humanoid.Health <= 0 or copyHumanoid.Health <= 0 then stopReanimation(); return end
+      boostSimulation()
       humanoid.RequiresNeck, humanoid.BreakJointsOnDeath, humanoid.PlatformStand = false, false, true
       for joint in pairs(session.jointCandidates) do
         if joint:IsDescendantOf(character) then
@@ -395,6 +431,12 @@ local function startReanimation()
         driveFollowers()
       end)
     end
+    -- v5: one more write after the frame's scripts ran, so the last CFrame sent to the server is ours
+    listen("heartbeat_drive", state.services.run_service.Heartbeat, function()
+      if not validRig() then return end
+      boostSimulation()
+      driveFollowers()
+    end)
     setSessionCamera(session)
   end)
   if not current() then return "Start cancelled." end
@@ -430,7 +472,7 @@ end
 
 local settings = {
     speed = 1, loop = true, stopOnMove = true, walkSync = true, blend = 0.15, recordRate = 20,
-    noclip = true, keyToggle = "RightControl", keyGui = "RightShift", keyStop = "X",
+    noclip = true, replicate = true, keyToggle = "RightControl", keyGui = "RightShift", keyStop = "X",
 }
 local data = {favorites = {}, custom = {}, states = {}, binds = {}, settings = settings}
 
@@ -452,6 +494,7 @@ do -- load
         end
     end
 end
+replicateEnabled = settings.replicate
 
 local function saveData()
     if not hasFS then return end
@@ -1025,6 +1068,7 @@ local function recordSample(time)
     rec.frames += 1
 end
 
+local ownerCheckT, lastUnowned = 0, 0
 local function engineStep(dt)
     local copy = engine.copy
     if not copy or not copy.Parent then return end
@@ -1032,6 +1076,18 @@ local function engineStep(dt)
     if settings.noclip then -- noclip: the controlled body passes through walls and parts
         for _, part in ipairs(engine.parts) do
             if part.Parent and part.CanCollide then part.CanCollide = false end
+        end
+    end
+    -- v5: network ownership check, reported in the title bar every 2s
+    if replicateEnabled then
+        ownerCheckT += dt
+        if ownerCheckT >= 2 then
+            ownerCheckT = 0
+            local n = countUnowned(player.Character)
+            if n and n ~= lastUnowned then
+                lastUnowned = n
+                if n > 0 then setStatus(n .. " parts not owned (others won't see)") end
+            end
         end
     end
     local e = engine.emote
@@ -1115,6 +1171,7 @@ local function engineStart()
     for _, object in ipairs(copy:GetDescendants()) do track(object) end
     engine.partConn = copy.DescendantAdded:Connect(track)
     engine.current, engine.emote, engine.stateAnims, engine.gen, engine.snapshot, engine.fadeT = nil, nil, {}, {}, {}, 1
+    ownerCheckT, lastUnowned = 0, 0
     rigLabel.Text = engine.rig
     for _, s in ipairs(STATES) do refreshState(s) end
     engine.conn = RunService.PreSimulation:Connect(engineStep)
@@ -1826,38 +1883,45 @@ label(tabR, "● Record captures whatever the rig is doing (emote, state animati
     2, 142, 352, 120, {TextSize = 11, TextColor3 = C.dim, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top})
 
 -- Settings tab -------------------------------------------------------
+-- v5: rows are 32px apart so the extra "Boost replication" toggle fits
 local tabG = tabFrames.Settings
-label(tabG, "Stop emote when moving", 4, 0, 280, 30)
-switch(tabG, UDim2.fromOffset(306, 3), settings.stopOnMove, function(v) settings.stopOnMove = v; saveSoon() end)
-label(tabG, "Sync walk speed to movement", 4, 34, 280, 30)
-switch(tabG, UDim2.fromOffset(306, 37), settings.walkSync, function(v) settings.walkSync = v; saveSoon() end)
-label(tabG, "Blend", 4, 68, 50, 30)
-local blendVal = label(tabG, string.format("%.2fs", settings.blend), 300, 68, 56, 30, {TextColor3 = C.dim, TextSize = 12})
-slider(tabG, 60, 76, 232, 0, 0.5, settings.blend, function(v)
+label(tabG, "Stop emote when moving", 4, 0, 280, 28)
+switch(tabG, UDim2.fromOffset(306, 2), settings.stopOnMove, function(v) settings.stopOnMove = v; saveSoon() end)
+label(tabG, "Sync walk speed to movement", 4, 32, 280, 28)
+switch(tabG, UDim2.fromOffset(306, 34), settings.walkSync, function(v) settings.walkSync = v; saveSoon() end)
+label(tabG, "Blend", 4, 64, 50, 28)
+local blendVal = label(tabG, string.format("%.2fs", settings.blend), 300, 64, 56, 28, {TextColor3 = C.dim, TextSize = 12})
+slider(tabG, 60, 71, 232, 0, 0.5, settings.blend, function(v)
     settings.blend = math.floor(v * 100 + 0.5) / 100
     blendVal.Text = string.format("%.2fs", settings.blend)
     saveSoon()
 end)
 local function bindRow(text, key, y)
-    label(tabG, text, 4, y, 220, 30)
-    local b = button(tabG, settings[key], 236, y, 120, 30, function()
+    label(tabG, text, 4, y, 220, 28)
+    local b = button(tabG, settings[key], 236, y, 120, 28, function()
         ui.binding = key
         ui.bindBtn[key].Text = "press key..."
     end)
     ui.bindBtn[key] = b
 end
-label(tabG, "Noclip while reanimated", 4, 102, 280, 30)
-switch(tabG, UDim2.fromOffset(306, 105), settings.noclip, function(v)
+label(tabG, "Noclip while reanimated", 4, 96, 280, 28)
+switch(tabG, UDim2.fromOffset(306, 98), settings.noclip, function(v)
     settings.noclip = v
     saveSoon()
     if not v then -- put collisions back the way they were
         for part, can in pairs(engine.collide) do if part.Parent then part.CanCollide = can end end
     end
 end)
-bindRow("Toggle reanim key", "keyToggle", 136)
-bindRow("Hide / show GUI key", "keyGui", 170)
-bindRow("Stop emote key", "keyStop", 204)
-button(tabG, "Reset saved data", 0, 246, 356, 30, function()
+label(tabG, "Boost replication (others see you)", 4, 128, 290, 28)
+switch(tabG, UDim2.fromOffset(306, 130), settings.replicate, function(v)
+    settings.replicate = v
+    replicateEnabled = v
+    saveSoon()
+end)
+bindRow("Toggle reanim key", "keyToggle", 160)
+bindRow("Hide / show GUI key", "keyGui", 192)
+bindRow("Stop emote key", "keyStop", 224)
+button(tabG, "Reset saved data", 0, 258, 356, 28, function()
     data.favorites, data.custom, data.states, data.binds = {}, {}, {}, {}
     saveData()
     ui.main, ui.sub, ui.selected = "All", "All", nil
@@ -1865,7 +1929,7 @@ button(tabG, "Reset saved data", 0, 246, 356, 30, function()
     for _, s in ipairs(STATES) do refreshState(s) end
     setStatus("Data reset")
 end)
-label(tabG, "Esc cancels a rebind. Hotkeys are ignored while typing in a text box. Emote binds: click the ⌨ button on an emote row, then press a key (Backspace clears).", 4, 284, 350, 30,
+label(tabG, "Esc cancels a rebind. Hotkeys are ignored while typing. Emote binds: click the ⌨ button on an emote row, then press a key (Backspace clears).", 4, 290, 350, 26,
     {TextSize = 10, TextColor3 = C.dim, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top})
 
 -- Footer (speed / stop / loop) ----------------------------------------
