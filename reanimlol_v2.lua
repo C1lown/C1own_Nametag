@@ -432,7 +432,7 @@ local settings = {
     speed = 1, loop = true, stopOnMove = true, walkSync = true, blend = 0.15, recordRate = 20,
     noclip = true, keyToggle = "RightControl", keyGui = "RightShift", keyStop = "X",
 }
-local data = {favorites = {}, custom = {}, states = {}, settings = settings}
+local data = {favorites = {}, custom = {}, states = {}, binds = {}, settings = settings}
 
 do -- load
     if hasFS then
@@ -440,7 +440,7 @@ do -- load
         if ok and raw then
             local ok2, decoded = pcall(function() return HttpService:JSONDecode(raw) end)
             if ok2 and type(decoded) == "table" then
-                for _, k in ipairs({"favorites", "custom", "states"}) do
+                for _, k in ipairs({"favorites", "custom", "states", "binds"}) do
                     if type(decoded[k]) == "table" then data[k] = decoded[k] end
                 end
                 if type(decoded.settings) == "table" then
@@ -1384,6 +1384,12 @@ T("UIListLayout", {Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOr
 T("UIPadding", {PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4), PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 4)}, list)
 label(tabE, "Select an animation, then pick a state to assign it to:", 2, 268, 350, 14, {TextSize = 10, TextColor3 = C.dim})
 
+local KEYSHORT = {Zero = "0", One = "1", Two = "2", Three = "3", Four = "4", Five = "5", Six = "6",
+    Seven = "7", Eight = "8", Nine = "9", LeftControl = "LCtrl", RightControl = "RCtrl", LeftShift = "LShift",
+    RightShift = "RShift", LeftAlt = "LAlt", RightAlt = "RAlt", Backquote = "`", Minus = "-", Equals = "=",
+    LeftBracket = "[", RightBracket = "]", Semicolon = ";", Quote = "'", Comma = ",", Period = ".", Slash = "/"}
+local function keyLabel(name) return name and (KEYSHORT[name] or name) or "⌨" end
+
 local function inMain(e)
     if ui.main == "All" then return true end
     if ui.main == "★ Favorites" then return data.favorites[e.key] == true end
@@ -1435,7 +1441,7 @@ end
 rebuildList = function(animate)
     if animate then list.CanvasPosition = Vector2.zero end
     for _, c in ipairs(list:GetChildren()) do if c:IsA("GuiObject") then c:Destroy() end end
-    ui.rows = {}
+    ui.rows, ui.ebtn = {}, {}
     local q = search.Text:lower()
     local order = 0
     for _, e in ipairs(getEntries()) do
@@ -1448,8 +1454,27 @@ rebuildList = function(animate)
                 BackgroundColor3 = (ui.selected and ui.selected.key == e.key) and C.sel or C.field}, list)
             corner(row, 8)
             local hasX = e.custom or e.recorded
-            label(row, e.name, 10, 0, 260 - (hasX and 28 or 0), 30, {TextTruncate = Enum.TextTruncate.AtEnd})
+            label(row, e.name, 10, 0, 135, 30, {TextTruncate = Enum.TextTruncate.AtEnd})
             label(row, e.sub, 150, 0, 90, 30, {TextSize = 10, TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Right})
+            -- keybind button: click, then press a key (Esc cancels, Backspace clears)
+            local bindBtn = T("TextButton", {Position = UDim2.new(1, hasX and -106 or -78, 0, 3), Size = UDim2.fromOffset(44, 24),
+                Text = keyLabel(data.binds[e.key]), TextSize = 11, TextTruncate = Enum.TextTruncate.AtEnd,
+                BackgroundColor3 = C.list, TextColor3 = data.binds[e.key] and C.text or C.dim}, row)
+            corner(bindBtn, 6)
+            ui.ebtn[e.key] = bindBtn
+            bindBtn.Activated:Connect(function()
+                if ui.bindingEmote == e.key then
+                    ui.bindingEmote = nil
+                    bindBtn.Text = keyLabel(data.binds[e.key])
+                    return
+                end
+                if ui.bindingEmote and ui.ebtn[ui.bindingEmote] then
+                    ui.ebtn[ui.bindingEmote].Text = keyLabel(data.binds[ui.bindingEmote])
+                end
+                ui.bindingEmote = e.key
+                bindBtn.Text = "..."
+                setStatus("Press a key for " .. e.name)
+            end)
             local star = T("TextButton", {Position = UDim2.new(1, -30, 0, 3), Size = UDim2.fromOffset(24, 24),
                 BackgroundTransparency = 1, TextSize = 18,
                 Text = data.favorites[e.key] and "★" or "☆"}, row)
@@ -1471,6 +1496,7 @@ rebuildList = function(animate)
                         if e.path and type(delfile) == "function" then pcall(delfile, e.path) end
                     end
                     data.favorites[e.key] = nil
+                    data.binds[e.key] = nil
                     if ui.selected and ui.selected.key == e.key then ui.selected = nil end
                     refreshChips(); rebuildList()
                 end)
@@ -1832,14 +1858,14 @@ bindRow("Toggle reanim key", "keyToggle", 136)
 bindRow("Hide / show GUI key", "keyGui", 170)
 bindRow("Stop emote key", "keyStop", 204)
 button(tabG, "Reset saved data", 0, 246, 356, 30, function()
-    data.favorites, data.custom, data.states = {}, {}, {}
+    data.favorites, data.custom, data.states, data.binds = {}, {}, {}, {}
     saveData()
     ui.main, ui.sub, ui.selected = "All", "All", nil
     refreshChips(); rebuildList(); refreshStateRows()
     for _, s in ipairs(STATES) do refreshState(s) end
     setStatus("Data reset")
 end)
-label(tabG, "Esc cancels a rebind. Hotkeys are ignored while typing in a text box.", 4, 284, 350, 30,
+label(tabG, "Esc cancels a rebind. Hotkeys are ignored while typing in a text box. Emote binds: click the ⌨ button on an emote row, then press a key (Backspace clears).", 4, 284, 350, 30,
     {TextSize = 10, TextColor3 = C.dim, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top})
 
 -- Footer (speed / stop / loop) ----------------------------------------
@@ -1863,6 +1889,31 @@ end)
 ----------------------------------------------------------------------
 connect(UserInputService.InputBegan, function(input, processed)
     if destroyed then return end
+    if ui.bindingEmote then
+        if input.UserInputType == Enum.UserInputType.Keyboard then
+            local key, k = ui.bindingEmote, input.KeyCode.Name
+            ui.bindingEmote = nil
+            if input.KeyCode == Enum.KeyCode.Escape then
+                -- cancelled
+            elseif input.KeyCode == Enum.KeyCode.Backspace or input.KeyCode == Enum.KeyCode.Delete then
+                data.binds[key] = nil
+                setStatus("Bind cleared")
+            elseif k == settings.keyToggle or k == settings.keyGui or k == settings.keyStop then
+                setStatus(k .. " is already a hotkey")
+            else
+                for other, boundKey in pairs(data.binds) do if boundKey == k then data.binds[other] = nil end end
+                data.binds[key] = k
+                local entry = findEntry(key)
+                setStatus(k .. " = " .. (entry and entry.name or "emote"))
+            end
+            saveData()
+            for entryKey, b in pairs(ui.ebtn) do
+                b.Text = keyLabel(data.binds[entryKey])
+                b.TextColor3 = data.binds[entryKey] and C.text or C.dim
+            end
+        end
+        return
+    end
     if ui.binding then
         if input.UserInputType == Enum.UserInputType.Keyboard then
             if input.KeyCode ~= Enum.KeyCode.Escape then settings[ui.binding] = input.KeyCode.Name; saveSoon() end
@@ -1887,6 +1938,17 @@ connect(UserInputService.InputBegan, function(input, processed)
         end
     elseif k == settings.keyStop then
         stopEmote()
+    else
+        -- emote binds: press to play, press again to stop
+        for entryKey, keyName in pairs(data.binds) do
+            if keyName == k then
+                local entry = findEntry(entryKey)
+                if entry then
+                    if engine.emote and engine.emote.key == entry.key then stopEmote() else playEntry(entry) end
+                end
+                break
+            end
+        end
     end
 end)
 connect(UserInputService.JumpRequest, function()
