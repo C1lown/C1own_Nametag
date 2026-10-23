@@ -302,6 +302,7 @@ local settings = {
     noclip = true, keyToggle = "RightControl", keyGui = "RightShift", keyStop = "X",
     keySpeedDown = "Minus", keySpeedUp = "Equals", keySpeedReset = "Zero",
     keyPause = "Y", keyRewind = "U", keyReverse = "I", keyDrive = "LeftAlt",
+    speedBinds = {},
 }
 local data = {favorites = {}, custom = {}, states = {}, binds = {}, settings = settings}
 
@@ -2013,8 +2014,47 @@ do
     bindButton(tabP, "Pause / resume", "keyPause", 122)
     bindButton(tabP, "Restart", "keyRewind", 156)
     bindButton(tabP, "Reverse", "keyReverse", 190)
-    label(tabP, "Works on emotes and state animations. Dragging the bar pauses and scrubs; the speed slider below still applies. Reverse plays the clip backwards.",
-        4, 228, 350, 60, {TextSize = 10, TextColor3 = C.dim, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top})
+    label(tabP, "Speed binds", 4, 222, 200, 14, {TextSize = 11, TextColor3 = C.dim})
+    local speedBox = box(tabP, "Speed", 0, 240, 70, 28)
+    local pickBtn
+    ui.speedPickText = function()
+        if pickBtn then pickBtn.Text = ui.speedKey and keyLabel(ui.speedKey) or "Pick key" end
+    end
+    pickBtn = button(tabP, "Pick key", 76, 240, 168, 28, function()
+        ui.bindingSpeed = true
+        pickBtn.Text = "press key..."
+    end)
+    local speedChips = chipRow(tabP, 274)
+    local function refreshSpeedChips()
+        clearButtons(speedChips)
+        local keys = {}
+        for k in pairs(settings.speedBinds) do keys[#keys + 1] = k end
+        table.sort(keys)
+        for i, k in ipairs(keys) do
+            local v = math.floor((tonumber(settings.speedBinds[k]) or 1) * 100 + 0.5) / 100
+            chip(speedChips, keyLabel(k) .. " = " .. tostring(v) .. "x  ✕", false, i, function()
+                settings.speedBinds[k] = nil
+                saveSoon()
+                refreshSpeedChips()
+            end)
+        end
+    end
+    button(tabP, "Add", 250, 240, 106, 28, function()
+        local v = tonumber(speedBox.Text)
+        if not v then setStatus("Type a speed first"); return end
+        if not ui.speedKey then setStatus("Pick a key first"); return end
+        v = math.clamp(math.floor(v * 20 + 0.5) / 20, 0.1, 3)
+        settings.speedBinds[ui.speedKey] = v
+        saveSoon()
+        setStatus(keyLabel(ui.speedKey) .. " = " .. tostring(v) .. "x")
+        speedBox.Text = ""
+        ui.speedKey = nil
+        ui.speedPickText()
+        refreshSpeedChips()
+    end)
+    label(tabP, "Press a bound key to jump to that speed (0.1 - 3). Click a chip to remove it.",
+        4, 304, 350, 12, {TextSize = 10, TextColor3 = C.dim})
+    refreshSpeedChips()
     connect(RunService.RenderStepped, function()
         if destroyed or currentTab ~= "Play" then return end
         local cur = engine.current
@@ -2453,8 +2493,32 @@ end)
 ----------------------------------------------------------------------
 -- Hotkeys + lifecycle
 ----------------------------------------------------------------------
+local function isReservedKey(k)
+    for _, name in ipairs({"keyToggle", "keyGui", "keyStop", "keySpeedDown", "keySpeedUp", "keySpeedReset",
+        "keyPause", "keyRewind", "keyReverse", "keyDrive"}) do
+        if settings[name] == k then return true end
+    end
+    for _, v in pairs(data.binds) do if v == k then return true end end
+    return false
+end
 connect(UserInputService.InputBegan, function(input, processed)
     if destroyed then return end
+    if ui.bindingSpeed then
+        if input.UserInputType == Enum.UserInputType.Keyboard then
+            ui.bindingSpeed = false
+            local k = input.KeyCode.Name
+            if input.KeyCode == Enum.KeyCode.Escape or input.KeyCode == Enum.KeyCode.Backspace then
+                ui.speedKey = nil
+            elseif isReservedKey(k) then
+                ui.speedKey = nil
+                setStatus(k .. " is already a hotkey")
+            else
+                ui.speedKey = k
+            end
+            ui.speedPickText()
+        end
+        return
+    end
     if ui.bindingEmote then
         if input.UserInputType == Enum.UserInputType.Keyboard then
             local key, k = ui.bindingEmote, input.KeyCode.Name
@@ -2466,7 +2530,8 @@ connect(UserInputService.InputBegan, function(input, processed)
                 setStatus("Bind cleared")
             elseif k == settings.keyToggle or k == settings.keyGui or k == settings.keyStop
                 or k == settings.keySpeedDown or k == settings.keySpeedUp or k == settings.keySpeedReset
-                or k == settings.keyPause or k == settings.keyRewind or k == settings.keyReverse or k == settings.keyDrive then
+                or k == settings.keyPause or k == settings.keyRewind or k == settings.keyReverse or k == settings.keyDrive
+                or settings.speedBinds[k] then
                 setStatus(k .. " is already a hotkey")
             else
                 for other, boundKey in pairs(data.binds) do if boundKey == k then data.binds[other] = nil end end
@@ -2521,6 +2586,8 @@ connect(UserInputService.InputBegan, function(input, processed)
         ctl.reverse()
     elseif k == settings.keyDrive then
         ctl.setDrive(true)
+    elseif settings.speedBinds[k] then
+        setSpeed(tonumber(settings.speedBinds[k]) or 1)
     else
         -- emote binds: press to play, press again to stop
         for entryKey, keyName in pairs(data.binds) do
