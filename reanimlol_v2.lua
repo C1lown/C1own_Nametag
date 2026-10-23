@@ -666,11 +666,13 @@ end
 -- GUI skeleton (needed by engine for status text)
 ----------------------------------------------------------------------
 local C = {
-    -- Novoline palette: near-black glass, neutral greys, one light "pill" accent with dark ink on top of it
-    bg = Color3.fromRGB(18, 18, 18), field = Color3.fromRGB(30, 30, 30), sel = Color3.fromRGB(46, 46, 49),
-    text = Color3.fromRGB(244, 244, 244), dim = Color3.fromRGB(160, 160, 160),
-    accent = Color3.fromRGB(242, 242, 244), off = Color3.fromRGB(58, 58, 62), list = Color3.fromRGB(23, 23, 23),
-    stroke = Color3.fromRGB(55, 55, 55), ink = Color3.fromRGB(18, 18, 20), danger = Color3.fromRGB(255, 96, 96),
+    -- Novoline layout, red palette: near-black wine glass, one crimson accent with white text on top of it
+    bg = Color3.fromRGB(20, 10, 11), field = Color3.fromRGB(38, 24, 26), sel = Color3.fromRGB(78, 34, 38),
+    text = Color3.fromRGB(246, 240, 240), dim = Color3.fromRGB(176, 150, 152),
+    accent = Color3.fromRGB(230, 57, 70), off = Color3.fromRGB(66, 44, 47), list = Color3.fromRGB(26, 14, 15),
+    stroke = Color3.fromRGB(96, 40, 46), div = Color3.fromRGB(58, 32, 35), card = Color3.fromRGB(40, 24, 27),
+    green = Color3.fromRGB(80, 210, 100), gold = Color3.fromRGB(255, 200, 40), ink = Color3.fromRGB(255, 255, 255),
+    danger = Color3.fromRGB(255, 130, 120),
 }
 local EASE = TweenInfo.new(.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
 local function tween(o, props, info)
@@ -730,20 +732,30 @@ local function box(parent, placeholder, x, y, w, h)
         PlaceholderText = placeholder, TextXAlignment = Enum.TextXAlignment.Left}, parent)
     corner(b, 10)
     T("UIPadding", {PaddingLeft = UDim.new(0, 12)}, b)
-    b.Font = Enum.Font.GothamMedium
+    b.Font = Enum.Font.GothamSemibold
+    b.BackgroundColor3, b.BackgroundTransparency = C.card, .24
+    b.PlaceholderColor3 = C.dim
+    local st = Instance.new("UIStroke")
+    st.Color, st.Thickness, st.Transparency, st.ApplyStrokeMode = C.div, 1, .5, Enum.ApplyStrokeMode.Border
+    st.Parent = b
+    b.Focused:Connect(function() tween(st, {Color = C.dim, Transparency = .2}, TweenInfo.new(.15)) end)
+    b.FocusLost:Connect(function() tween(st, {Color = C.div, Transparency = .5}, TweenInfo.new(.2)) end)
     return b
 end
 local function switch(parent, pos, initial, onChange)
-    local b = T("TextButton", {Position = pos, Size = UDim2.fromOffset(46, 24), Text = "", BackgroundColor3 = C.off}, parent)
-    corner(b, 12)
-    local knob = T("Frame", {Size = UDim2.fromOffset(18, 18), Position = UDim2.fromOffset(3, 3), BackgroundColor3 = C.dim}, b)
-    corner(knob, 9)
+    local b = T("TextButton", {Position = UDim2.new(pos.X.Scale, pos.X.Offset - 6, pos.Y.Scale, pos.Y.Offset - 1),
+        Size = UDim2.fromOffset(52, 26), Text = "", BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = .86}, parent)
+    corner(b, 13)
+    local fill = T("Frame", {Size = UDim2.fromScale(1, 1), BackgroundColor3 = C.accent, BackgroundTransparency = 1}, b)
+    corner(fill, 13)
+    local knob = T("Frame", {AnchorPoint = Vector2.new(.5, .5), Size = UDim2.fromOffset(32, 22), Position = UDim2.new(0, 18, .5, 0),
+        BackgroundColor3 = Color3.new(1, 1, 1), ZIndex = 2}, b)
+    corner(knob, 11)
     local api = {value = initial}
     function api.set(v)
         api.value = v
-        tween(b, {BackgroundColor3 = v and C.accent or C.off})
-        tween(knob, {BackgroundColor3 = v and C.ink or C.dim})
-        TweenService:Create(knob, TweenInfo.new(.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Position = UDim2.fromOffset(v and 25 or 3, 3)}):Play()
+        tween(fill, {BackgroundTransparency = v and .05 or 1}, TweenInfo.new(.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out))
+        tween(knob, {Position = UDim2.new(0, v and 34 or 18, .5, 0)}, TweenInfo.new(.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out))
     end
     b.Activated:Connect(function()
         api.set(not api.value)
@@ -753,14 +765,21 @@ local function switch(parent, pos, initial, onChange)
     return api
 end
 local function slider(parent, x, y, w, min, max, value, onChange)
-    local bar = T("Frame", {Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(w, 14), BackgroundColor3 = C.off}, parent)
-    corner(bar, 7)
-    local fill = T("Frame", {Size = UDim2.fromScale(0, 1), BackgroundColor3 = C.accent}, bar)
-    corner(fill, 7)
+    local bar = T("Frame", {Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(w, 14), BackgroundTransparency = 1}, parent)
+    local track = T("Frame", {AnchorPoint = Vector2.new(0, .5), Position = UDim2.new(0, 0, .5, 0), Size = UDim2.new(1, 0, 0, 6),
+        BackgroundColor3 = C.off}, bar)
+    corner(track, 3)
+    local fill = T("Frame", {Size = UDim2.fromScale(0, 1), BackgroundColor3 = C.accent}, track)
+    corner(fill, 3)
+    local knob = T("Frame", {AnchorPoint = Vector2.new(.5, .5), Size = UDim2.fromOffset(14, 14), Position = UDim2.new(0, 0, .5, 0),
+        BackgroundColor3 = Color3.new(1, 1, 1), ZIndex = 2}, bar)
+    corner(knob, 7)
     local api, dragging = {}, false
     function api.set(v, fire)
         v = math.clamp(v, min, max)
-        fill.Size = UDim2.fromScale((v - min) / (max - min), 1)
+        local p = (v - min) / (max - min)
+        fill.Size = UDim2.fromScale(p, 1)
+        knob.Position = UDim2.new(p, 0, .5, 0)
         api.value = v
         if fire then onChange(v) end
     end
@@ -788,31 +807,23 @@ local gui = Instance.new("ScreenGui")
 gui.Name, gui.ResetOnSpawn = "Reanimlol", false
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = player:WaitForChild("PlayerGui")
-local panel = T("Frame", {Size = UDim2.fromOffset(380, 470), Position = UDim2.new(0.5, -190, 0.5, -235),
+local PANEL_W, PANEL_H, BAR_H = 392, 534, 44
+local panel = T("Frame", {Size = UDim2.fromOffset(PANEL_W, PANEL_H), Position = UDim2.new(0.5, -PANEL_W / 2, 0.5, -PANEL_H / 2),
     BackgroundColor3 = Color3.new(1, 1, 1), Active = true}, gui)
-corner(panel, 26)
+corner(panel, 14)
 do
     -- Novoline glass: dark vertical gradient body, hairline white rim, soft top shine, dark drop glow
     local stroke = Instance.new("UIStroke")
-    stroke.Color, stroke.Thickness, stroke.Transparency, stroke.ApplyStrokeMode = Color3.new(1, 1, 1), 1, .84, Enum.ApplyStrokeMode.Border
+    stroke.Color, stroke.Thickness, stroke.Transparency, stroke.ApplyStrokeMode = C.stroke, 1, .45, Enum.ApplyStrokeMode.Border
     stroke.Parent = panel
     local grad = Instance.new("UIGradient")
     grad.Rotation = 90
     grad.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(26, 26, 28)),
-        ColorSequenceKeypoint.new(0.45, Color3.fromRGB(16, 16, 17)),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(8, 8, 9)),
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(40, 16, 19)),
+        ColorSequenceKeypoint.new(0.45, Color3.fromRGB(20, 9, 11)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(10, 4, 5)),
     })
     grad.Parent = panel
-    local shine = Instance.new("Frame")
-    shine.Name, shine.Size, shine.BackgroundColor3, shine.BackgroundTransparency = "Shine", UDim2.new(1, 0, 0, 70), Color3.new(1, 1, 1), .88
-    shine.BorderSizePixel, shine.Active, shine.ZIndex = 0, false, 0
-    shine.Parent = panel
-    corner(shine, 26)
-    local sg = Instance.new("UIGradient")
-    sg.Rotation = 90
-    sg.Transparency = NumberSequence.new({NumberSequenceKeypoint.new(0, 0.2), NumberSequenceKeypoint.new(0.6, 0.9), NumberSequenceKeypoint.new(1, 1)})
-    sg.Parent = shine
     pcall(function()
         local glow = Instance.new("UIShadow")
         glow.Name, glow.Color, glow.BlurRadius, glow.Offset, glow.Transparency = "DarkGlow", Color3.new(0, 0, 0), UDim.new(0, 26), UDim2.fromOffset(0, 10), .45
@@ -824,11 +835,11 @@ panelScale.Scale = .9
 panelScale.Parent = panel
 panel.BackgroundTransparency = 1
 tween(panelScale, {Scale = 1}, TweenInfo.new(.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out))
-tween(panel, {BackgroundTransparency = 0.04}, TweenInfo.new(.3))
-local dragBar = T("Frame", {Size = UDim2.new(1, 0, 0, 38), BackgroundTransparency = 1}, panel)
-local title = label(dragBar, "reanimlol", 18, 0, 190, 38, {Font = Enum.Font.GothamBold, TextSize = 15,
+tween(panel, {BackgroundTransparency = 0}, TweenInfo.new(.3))
+local dragBar = T("Frame", {Size = UDim2.new(1, 0, 0, BAR_H), BackgroundTransparency = 1}, panel)
+local title = label(dragBar, "reanimlol", 18, 0, 200, BAR_H, {Font = Enum.Font.GothamBold, TextSize = 18,
     TextTruncate = Enum.TextTruncate.AtEnd})
-local rigLabel = label(dragBar, "", 212, 0, 40, 38, {TextColor3 = C.dim, TextSize = 12})
+local rigLabel = label(dragBar, "", 226, 0, 52, BAR_H, {TextColor3 = C.dim, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Right})
 do
     local dragging, dragStart, startPos = false
     dragBar.InputBegan:Connect(function(i)
@@ -858,10 +869,44 @@ local function setStatus(text, sticky)
 end
 
 local turnOn, turnOff, playEntry, stopEmote
-local mainSwitch = switch(panel, UDim2.fromOffset(262, 7), false, function(v)
-    if v then turnOn() else turnOff() end
+-- window buttons: minimize (collapses to the title bar) and close, round like Novoline's
+local function barButton(rightOffset, glyph, cb)
+    local b = T("TextButton", {Size = UDim2.fromOffset(28, 28), Position = UDim2.new(1, -rightOffset - 28, 0.5, -14), Text = glyph,
+        TextSize = 15, TextTransparency = .35, BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = 1, ZIndex = 5}, panel)
+    corner(b, 14)
+    b.MouseEnter:Connect(function() tween(b, {BackgroundTransparency = .9, TextTransparency = 0}, TweenInfo.new(.15)) end)
+    b.MouseLeave:Connect(function() tween(b, {BackgroundTransparency = 1, TextTransparency = .35}, TweenInfo.new(.2)) end)
+    b.Activated:Connect(cb)
+    return b
+end
+local closeBtn = barButton(14, "✕", function() if shared.ReanimlolCleanup then shared.ReanimlolCleanup() end end)
+local minimized = false
+barButton(14 + 28 + 4, "–", function()
+    minimized = not minimized
+    panel.ClipsDescendants = true
+    tween(panel, {Size = UDim2.fromOffset(PANEL_W, minimized and BAR_H or PANEL_H)}, TweenInfo.new(.35, Enum.EasingStyle.Quint, Enum.EasingDirection.Out))
+    if not minimized then task.delay(.4, function() if not destroyed and not minimized then panel.ClipsDescendants = false end end) end
 end)
-local closeBtn = button(panel, "✕", 336, 7, 28, 24, function() if shared.ReanimlolCleanup then shared.ReanimlolCleanup() end end)
+
+-- status chip + Reanimate button (replaces the old on/off switch; same set() API)
+local statusDot = T("Frame", {Position = UDim2.fromOffset(28, 54 + 13), Size = UDim2.fromOffset(6, 6), BackgroundColor3 = C.div}, panel)
+corner(statusDot, 3)
+local statusLbl = label(panel, "Status: Idle", 44, 54, 190, 32, {Font = Enum.Font.GothamSemibold, TextColor3 = C.dim})
+local reanimBtn = T("TextButton", {Position = UDim2.fromOffset(PANEL_W - 18 - 120, 54), Size = UDim2.fromOffset(120, 32), Text = "Reanimate",
+    Font = Enum.Font.GothamBold, BackgroundColor3 = C.card, BackgroundTransparency = .6}, panel)
+corner(reanimBtn, 10)
+reanimBtn.MouseEnter:Connect(function() tween(reanimBtn, {BackgroundTransparency = .45}, TweenInfo.new(.22, Enum.EasingStyle.Quint)) end)
+reanimBtn.MouseLeave:Connect(function() tween(reanimBtn, {BackgroundTransparency = .6}, TweenInfo.new(.22, Enum.EasingStyle.Quint)) end)
+local mainSwitch = {value = false}
+function mainSwitch.set(v)
+    mainSwitch.value = v
+    reanimBtn.Text = v and "Stop Reanim" or "Reanimate"
+    statusLbl.Text = v and "Status: Active" or "Status: Idle"
+    tween(statusDot, {BackgroundColor3 = v and C.green or C.div}, TweenInfo.new(.2))
+end
+reanimBtn.Activated:Connect(function()
+    if mainSwitch.value then turnOff() else turnOn() end
+end)
 
 ----------------------------------------------------------------------
 -- Engine: state animations, emotes, blending, recording
@@ -1242,15 +1287,15 @@ loadKeyframeFiles()
 ----------------------------------------------------------------------
 local tabNames = {"Emotes", "States", "Play", "Live", "Tricks", "Import", "Record", "Settings"}
 local tabFrames, tabButtons, tabOrder = {}, {}, {}
-local TAB_X, TAB_Y = 12, 74
-T("Frame", {Position = UDim2.fromOffset(12, 71), Size = UDim2.new(1, -24, 0, 1), BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = .92}, panel)
--- Novoline marks the active tab with a light pill instead of an underline; the slider stays as a hidden no-op
-local indicator = T("Frame", {Position = UDim2.fromOffset(12, 68), Size = UDim2.fromOffset(68, 3), BackgroundColor3 = C.accent, BackgroundTransparency = 1}, panel)
-corner(indicator, 2)
--- 8 tabs don't fit in one row, so the strip scrolls sideways (drag / mouse wheel / click scrolls the tab into view)
-local tabStrip = T("ScrollingFrame", {Position = UDim2.fromOffset(12, 40), Size = UDim2.fromOffset(356, 26),
-    BackgroundTransparency = 1, ScrollBarThickness = 0, CanvasSize = UDim2.fromOffset(#tabNames * 72, 0),
-    ScrollingDirection = Enum.ScrollingDirection.X, ClipsDescendants = true}, panel)
+local TAB_X, TAB_Y = 18, 138
+local TAB_BAR_Y, TAB_BAR_H, TAB_PAD = 96, 34, 3
+local TAB_LABEL = {Settings = "Prefs"}
+local CELL = 1 / #tabNames
+local tabBar = T("Frame", {Position = UDim2.fromOffset(18, TAB_BAR_Y), Size = UDim2.fromOffset(PANEL_W - 36, TAB_BAR_H),
+    BackgroundTransparency = 1}, panel)
+local tabPill = T("Frame", {Position = UDim2.new(0, TAB_PAD, 0, TAB_PAD), Size = UDim2.new(CELL, -TAB_PAD * 2, 1, -TAB_PAD * 2),
+    BackgroundColor3 = Color3.fromRGB(150, 40, 50), BackgroundTransparency = .35}, tabBar)
+corner(tabPill, 8)
 local currentTab, tabToken = "Emotes", 0
 local function showTab(name)
     local first = (tabFrames[name].Visible == false and name == currentTab)
@@ -1259,15 +1304,10 @@ local function showTab(name)
     local dir = (tabOrder[name] >= tabOrder[currentTab]) and 1 or -1
     local old = currentTab
     currentTab = name
-    do
-        local maxX = math.max(#tabNames * 72 - 4 - 356, 0)
-        tween(tabStrip, {CanvasPosition = Vector2.new(math.clamp((tabOrder[name] - 1) * 72 - 144, 0, maxX), 0)}, TweenInfo.new(.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out))
-    end
     for n, b in pairs(tabButtons) do
-        setBase(b, n == name and C.accent or C.field)
-        tween(b, {TextColor3 = n == name and C.ink or C.dim})
+        tween(b, {TextColor3 = n == name and C.text or C.dim})
     end
-    tween(indicator, {Position = UDim2.fromOffset(12 + (tabOrder[name] - 1) * 72, 68)}, TweenInfo.new(.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out))
+    tween(tabPill, {Position = UDim2.new(CELL * (tabOrder[name] - 1), TAB_PAD, 0, TAB_PAD)}, TweenInfo.new(.35, Enum.EasingStyle.Quint, Enum.EasingDirection.Out))
     for n, f in pairs(tabFrames) do
         if n == name then
             f.Visible = true
@@ -1287,11 +1327,13 @@ end
 for i, name in ipairs(tabNames) do
     tabOrder[name] = i
     tabFrames[name] = T("CanvasGroup", {Position = UDim2.fromOffset(TAB_X, TAB_Y), Size = UDim2.fromOffset(356, 318),
-        BackgroundTransparency = 1, Visible = (i == 1)}, panel)
-    tabButtons[name] = button(tabStrip, name, (i - 1) * 72, 0, 68, 26, function() showTab(name) end)
-    tabButtons[name].TextColor3 = (i == 1) and C.ink or C.dim
-    corner(tabButtons[name], 13)
-    if i == 1 then setBase(tabButtons[name], C.accent) end
+        BackgroundTransparency = 1, Visible = (i == 1)}, tabBar.Parent)
+    local b = T("TextButton", {Position = UDim2.new(CELL * (i - 1), 0, 0, 0), Size = UDim2.new(CELL, 0, 1, 0), BackgroundTransparency = 1,
+        Text = TAB_LABEL[name] or name, TextScaled = true, Font = Enum.Font.GothamBold, TextColor3 = (i == 1) and C.text or C.dim, ZIndex = 3}, tabBar)
+    T("UITextSizeConstraint", {MaxTextSize = 12, MinTextSize = 7}, b)
+    T("UIPadding", {PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4), PaddingTop = UDim.new(0, 9), PaddingBottom = UDim.new(0, 9)}, b)
+    b.Activated:Connect(function() showTab(name) end)
+    tabButtons[name] = b
 end
 
 local ui = {main = "All", sub = "All", selected = nil, rows = {}, bindBtn = {}}
@@ -1324,13 +1366,12 @@ end
 
 -- Emotes tab ---------------------------------------------------------
 local tabE = tabFrames.Emotes
-local search = box(tabE, "Search emotes", 0, 0, 356, 28)
+local search = box(tabE, "Search animations...", 0, 0, 356, 28)
 local mainRow = chipRow(tabE, 32)
 local subRow = chipRow(tabE, 60)
 local list = T("ScrollingFrame", {Position = UDim2.fromOffset(0, 90), Size = UDim2.fromOffset(356, 176),
-    BackgroundColor3 = C.list, ScrollBarThickness = 4, CanvasSize = UDim2.new(),
-    AutomaticCanvasSize = Enum.AutomaticSize.Y}, tabE)
-corner(list, 16)
+    BackgroundTransparency = 1, ScrollBarThickness = 2, ScrollBarImageColor3 = C.accent, ScrollBarImageTransparency = .6,
+    CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y}, tabE)
 T("UIListLayout", {Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder}, list)
 T("UIPadding", {PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4), PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 4)}, list)
 label(tabE, "Select an animation, then pick a state to assign it to:", 2, 268, 350, 14, {TextSize = 10, TextColor3 = C.dim})
@@ -1339,7 +1380,12 @@ local KEYSHORT = {Zero = "0", One = "1", Two = "2", Three = "3", Four = "4", Fiv
     Seven = "7", Eight = "8", Nine = "9", LeftControl = "LCtrl", RightControl = "RCtrl", LeftShift = "LShift",
     RightShift = "RShift", LeftAlt = "LAlt", RightAlt = "RAlt", Backquote = "`", Minus = "-", Equals = "=",
     LeftBracket = "[", RightBracket = "]", Semicolon = ";", Quote = "'", Comma = ",", Period = ".", Slash = "/"}
-local function keyLabel(name) return name and (KEYSHORT[name] or name) or "⌨" end
+local function keyLabel(name) return name and (KEYSHORT[name] or name) or "bind" end
+-- Novoline-style library rows: no fill, soft light wash on hover / selection
+local function rowTint(row, selected)
+    row:SetAttribute("restT", selected and .8 or 1)
+    tween(row, {BackgroundTransparency = selected and .8 or 1}, TweenInfo.new(.2))
+end
 
 local function inMain(e)
     if ui.main == "All" then return true end
@@ -1384,7 +1430,7 @@ local function popIn(row, delay)
         if destroyed or not row.Parent then return end
         local info = TweenInfo.new(.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
         TweenService:Create(sc, info, {Scale = 1}):Play()
-        TweenService:Create(row, info, {BackgroundTransparency = 0}):Play()
+        TweenService:Create(row, info, {BackgroundTransparency = row:GetAttribute("restT") or 1}):Play()
         for d, tr in pairs(texts) do TweenService:Create(d, info, {TextTransparency = tr}):Play() end
     end)
 end
@@ -1401,17 +1447,21 @@ rebuildList = function(animate)
         if show and q ~= "" then show = e.name:lower():find(q, 1, true) ~= nil end
         if show then
             order += 1
+            local isSel = ui.selected and ui.selected.key == e.key
             local row = T("TextButton", {Size = UDim2.new(1, -6, 0, 30), Text = "", LayoutOrder = order,
-                BackgroundColor3 = (ui.selected and ui.selected.key == e.key) and C.sel or C.field}, list)
-            corner(row, 11)
+                BackgroundColor3 = C.accent, BackgroundTransparency = isSel and .8 or 1}, list)
+            row:SetAttribute("restT", isSel and .8 or 1)
+            corner(row, 8)
+            row.MouseEnter:Connect(function() tween(row, {BackgroundTransparency = .7}, TweenInfo.new(.15)) end)
+            row.MouseLeave:Connect(function() tween(row, {BackgroundTransparency = row:GetAttribute("restT") or 1}, TweenInfo.new(.2)) end)
             local hasX = e.custom or e.recorded
-            label(row, e.name, 10, 0, 135, 30, {TextTruncate = Enum.TextTruncate.AtEnd})
+            label(row, e.name, 10, 0, 135, 30, {TextTruncate = Enum.TextTruncate.AtEnd, TextSize = 12})
             label(row, e.sub, 150, 0, 90, 30, {TextSize = 10, TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Right})
             -- keybind button: click, then press a key (Esc cancels, Backspace clears)
             local bindBtn = T("TextButton", {Position = UDim2.new(1, hasX and -106 or -78, 0, 3), Size = UDim2.fromOffset(44, 24),
-                Text = keyLabel(data.binds[e.key]), TextSize = 11, TextTruncate = Enum.TextTruncate.AtEnd,
-                BackgroundColor3 = C.list, TextColor3 = data.binds[e.key] and C.text or C.dim}, row)
-            corner(bindBtn, 9)
+                Text = keyLabel(data.binds[e.key]), TextSize = 10, TextTruncate = Enum.TextTruncate.AtEnd,
+                BackgroundTransparency = 1, TextXAlignment = Enum.TextXAlignment.Right,
+                TextColor3 = data.binds[e.key] and C.accent or C.dim}, row)
             ui.ebtn[e.key] = bindBtn
             bindBtn.Activated:Connect(function()
                 if ui.bindingEmote == e.key then
@@ -1427,13 +1477,16 @@ rebuildList = function(animate)
                 setStatus("Press a key for " .. e.name)
             end)
             local star = T("TextButton", {Position = UDim2.new(1, -30, 0, 3), Size = UDim2.fromOffset(24, 24),
-                BackgroundTransparency = 1, TextSize = 18,
+                BackgroundTransparency = 1, TextSize = 18, TextColor3 = data.favorites[e.key] and C.gold or C.dim,
                 Text = data.favorites[e.key] and "★" or "☆"}, row)
             star.Activated:Connect(function()
                 if data.favorites[e.key] then data.favorites[e.key] = nil else data.favorites[e.key] = true end
                 saveData()
                 if ui.main == "★ Favorites" then refreshChips(); rebuildList()
-                else star.Text = data.favorites[e.key] and "★" or "☆" end
+                else
+                    star.Text = data.favorites[e.key] and "★" or "☆"
+                    star.TextColor3 = data.favorites[e.key] and C.gold or C.dim
+                end
             end)
             if hasX then
                 local del = T("TextButton", {Position = UDim2.new(1, -58, 0, 3), Size = UDim2.fromOffset(24, 24),
@@ -1453,12 +1506,11 @@ rebuildList = function(animate)
                 end)
             end
             ui.rows[e.key] = row
-            hoverable(row)
             if animate and order <= 12 then popIn(row, (order - 1) * 0.03) end
             row.Activated:Connect(function()
-                if ui.selected and ui.rows[ui.selected.key] then setBase(ui.rows[ui.selected.key], C.field) end
+                if ui.selected and ui.rows[ui.selected.key] then rowTint(ui.rows[ui.selected.key], false) end
                 ui.selected = e
-                setBase(row, C.sel)
+                rowTint(row, true)
                 -- clicking the animation that's already playing stops it
                 if engine.emote and engine.emote.key == e.key then
                     stopEmote()
@@ -1500,9 +1552,9 @@ local function openDropdown(s, anchor)
     local scale = math.max(panelScale.Scale, 0.01)
     local rel = (anchor.AbsolutePosition - panel.AbsolutePosition) / scale
     local w, h = 300, 200
-    local x = math.clamp(rel.X, 6, 380 - w - 6)
+    local x = math.clamp(rel.X, 6, PANEL_W - w - 6)
     local y = rel.Y + anchor.AbsoluteSize.Y / scale + 2
-    if y + h > 464 then y = rel.Y - h - 2 end
+    if y + h > PANEL_H - 6 then y = rel.Y - h - 2 end
 
     dropCatcher = T("TextButton", {Size = UDim2.fromOffset(4000, 4000), Position = UDim2.fromOffset(-2000, -2000),
         BackgroundTransparency = 1, Text = "", ZIndex = 9}, panel)
@@ -1573,7 +1625,7 @@ openStatePicker = function(anchor)
     local scale = math.max(panelScale.Scale, 0.01)
     local rel = (anchor.AbsolutePosition - panel.AbsolutePosition) / scale
     local w, h = anchor.AbsoluteSize.X / scale, #STATES * 29 + 9
-    local x = math.clamp(rel.X, 6, math.max(6, 380 - w - 6))
+    local x = math.clamp(rel.X, 6, math.max(6, PANEL_W - w - 6))
     local y = rel.Y - h - 2 -- opens upward; the button sits near the bottom of the panel
     if y < 6 then y = rel.Y + anchor.AbsoluteSize.Y / scale + 2 end
 
@@ -2352,9 +2404,9 @@ do
 end
 
 -- Footer (speed / stop / loop) ----------------------------------------
-label(panel, "Speed", 14, 398, 46, 22, {TextColor3 = C.dim, TextSize = 12})
-local speedVal = label(panel, string.format("%.2fx", settings.speed), 318, 398, 52, 22, {TextColor3 = C.dim, TextSize = 12})
-local speedSlider = slider(panel, 62, 402, 250, 0.1, 3, settings.speed, function(v)
+label(panel, "Speed", 18, 466, 46, 22, {TextColor3 = C.dim, TextSize = 12})
+local speedVal = label(panel, string.format("%.2fx", settings.speed), 316, 466, 58, 22, {TextColor3 = C.dim, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Right})
+local speedSlider = slider(panel, 70, 470, 236, 0.1, 3, settings.speed, function(v)
     settings.speed = math.floor(v * 20 + 0.5) / 20
     speedVal.Text = string.format("%.2fx", settings.speed)
     saveSoon()
@@ -2367,9 +2419,9 @@ local function setSpeed(v)
     saveSoon()
     setStatus(string.format("Speed %.2fx", v))
 end
-button(panel, "■ Stop emote", 12, 430, 110, 28, function() stopEmote() end)
-label(panel, "Loop", 138, 430, 36, 28, {TextColor3 = C.dim, TextSize = 12})
-switch(panel, UDim2.fromOffset(176, 432), settings.loop, function(v)
+button(panel, "■ Stop emote", 18, 496, 110, 28, function() stopEmote() end)
+label(panel, "Loop", 146, 496, 36, 28, {TextColor3 = C.dim, TextSize = 12})
+switch(panel, UDim2.fromOffset(190, 498), settings.loop, function(v)
     settings.loop = v
     if engine.emote then engine.emote.loop = v and not engine.emote.anim.hold end
     saveSoon()
@@ -2402,7 +2454,7 @@ connect(UserInputService.InputBegan, function(input, processed)
             saveData()
             for entryKey, b in pairs(ui.ebtn) do
                 b.Text = keyLabel(data.binds[entryKey])
-                b.TextColor3 = data.binds[entryKey] and C.text or C.dim
+                b.TextColor3 = data.binds[entryKey] and C.accent or C.dim
             end
         end
         return
