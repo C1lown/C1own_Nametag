@@ -1431,7 +1431,7 @@ local list = T("ScrollingFrame", {Position = UDim2.fromOffset(0, 90), Size = UDi
 corner(list, 10)
 T("UIListLayout", {Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder}, list)
 T("UIPadding", {PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4), PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 4)}, list)
-label(tabE, "Set selected as state animation:", 2, 268, 300, 14, {TextSize = 10, TextColor3 = C.dim})
+label(tabE, "Select an animation, then pick a state to assign it to:", 2, 268, 350, 14, {TextSize = 10, TextColor3 = C.dim})
 
 local function inMain(e)
     if ui.main == "All" then return true end
@@ -1552,12 +1552,10 @@ local function assignState(s, e)
     refreshState(s)
     setStatus(cap(s) .. " = " .. e.name)
 end
-for i, s in ipairs(STATES) do
-    button(tabE, cap(s), (i - 1) * 51, 284, 48, 28, function()
-        if not ui.selected then setStatus("Select an entry first"); return end
-        assignState(s, ui.selected)
-    end)
-end
+local openStatePicker -- defined in the States section (shares the popup helpers)
+local stateBtn = button(tabE, "Choose state to assign  ▼", 0, 284, 356, 28, function()
+    openStatePicker(stateBtn)
+end)
 
 -- States tab ---------------------------------------------------------
 local tabS = tabFrames.States
@@ -1649,6 +1647,44 @@ local function openDropdown(s, anchor)
     end
     searchBox:GetPropertyChangedSignal("Text"):Connect(populate)
     populate()
+end
+
+-- Emotes tab: pick which state (Idle, Walk, ...) the selected animation is assigned to
+openStatePicker = function(anchor)
+    if not ui.selected then setStatus("Select an entry first"); return end
+    closeDropdown()
+    local scale = math.max(panelScale.Scale, 0.01)
+    local rel = (anchor.AbsolutePosition - panel.AbsolutePosition) / scale
+    local w, h = anchor.AbsoluteSize.X / scale, #STATES * 29 + 9
+    local x = math.clamp(rel.X, 6, math.max(6, 380 - w - 6))
+    local y = rel.Y - h - 2 -- opens upward; the button sits near the bottom of the panel
+    if y < 6 then y = rel.Y + anchor.AbsoluteSize.Y / scale + 2 end
+
+    dropCatcher = T("TextButton", {Size = UDim2.fromOffset(4000, 4000), Position = UDim2.fromOffset(-2000, -2000),
+        BackgroundTransparency = 1, Text = "", ZIndex = 9}, panel)
+    dropCatcher.Activated:Connect(closeDropdown)
+    local frame = T("Frame", {Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(w, h),
+        BackgroundColor3 = C.bg, ZIndex = 10}, panel)
+    dropFrame = frame
+    corner(frame, 10)
+    local stroke = Instance.new("UIStroke")
+    stroke.Color, stroke.Thickness, stroke.ApplyStrokeMode = C.stroke, 1.5, Enum.ApplyStrokeMode.Border
+    stroke.Parent = frame
+    T("UIListLayout", {Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder}, frame)
+    T("UIPadding", {PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4), PaddingTop = UDim.new(0, 4), PaddingBottom = UDim.new(0, 4)}, frame)
+    local picked = ui.selected
+    for i, s in ipairs(STATES) do
+        local row = T("TextButton", {Size = UDim2.new(1, 0, 0, 26), Text = "", LayoutOrder = i}, frame)
+        corner(row, 6)
+        label(row, cap(s), 10, 0, 100, 26)
+        label(row, stateEntry(s).name, 110, 0, w - 130, 26, {TextSize = 10, TextColor3 = C.dim,
+            TextXAlignment = Enum.TextXAlignment.Right, TextTruncate = Enum.TextTruncate.AtEnd})
+        hoverable(row)
+        row.Activated:Connect(function()
+            assignState(s, picked)
+            closeDropdown()
+        end)
+    end
 end
 
 for i, s in ipairs(STATES) do
