@@ -4,6 +4,12 @@
 -- samples itself and writes to the rig's Motor6D.Transform values. Works on R6 and R15.
 -- Enable the toggle (or press the hotkey) first. Saved data (favorites, imported clips, state picks,
 -- settings, recordings) is written to the "Reanimlol" folder when your executor supports writefile.
+--
+-- Import fixes in this build:
+--   * keyframe files are detected by CONTENT (Lua tables with Time / CFrame.new vs JSON), not by extension
+--   * "Load file" also tries .lua / .json / .txt when you type a name without an extension
+--   * the invalid-data message now tells you how much text arrived (pasting very large files fails
+--     because a text box can't hold them: use Load file instead)
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -614,6 +620,11 @@ local function parseLuaClips(text)
     return out
 end
 
+-- True when the text looks like a Lua keyframe export (Time = ... CFrame.new(...)) rather than JSON
+local function looksLikeLuaKeyframes(text)
+    return text:find("CFrame.new", 1, true) ~= nil and text:find("Time%s*=") ~= nil
+end
+
 -- Authoring helpers ----------------------------------------------------
 local function K(t, pose, style, dir) return {t = t, pose = pose, style = style, dir = dir} end
 -- Samples fn(angle 0..2pi) n times across one loop
@@ -785,7 +796,7 @@ end
 
 -- Entries --------------------------------------------------------------
 local recorded = {} -- recorded entries {key,name,cat,sub,recorded=true,clip=,path=}
-local fileClips = {} -- keyframe JSON files from Reanimlol/keyframes
+local fileClips = {} -- keyframe files from Reanimlol/keyframes
 
 -- drop leftovers from older versions (animation IDs)
 for s, v in pairs(data.states) do
@@ -1274,6 +1285,8 @@ do -- load saved recordings
 end
 
 do -- load keyframe files (Reanimlol/keyframes/*.json, *.lua, *.txt)
+    -- The parser is picked by CONTENT, not by file extension: a Lua keyframe export saved as
+    -- ".json" (or a JSON file saved as ".lua") still loads.
     if hasFS and type(listfiles) == "function" then
         pcall(function()
             ensureFolder(ROOT); ensureFolder(ROOT .. "/keyframes")
@@ -1281,20 +1294,22 @@ do -- load keyframe files (Reanimlol/keyframes/*.json, *.lua, *.txt)
                 path = tostring(path)
                 local ext = (path:match("%.(%w+)$") or ""):lower()
                 local base = path:match("([^/\\]+)%.%w+$") or "Imported"
-                local ok, raw = pcall(readfile, path)
-                if ok and type(raw) == "string" then
-                    if ext == "json" then
-                        local okJ, tbl = pcall(function() return HttpService:JSONDecode(raw) end)
-                        local def = okJ and parseDef(tbl)
-                        if def then
-                            local name = tostring(tbl.name or base)
-                            fileClips[#fileClips + 1] = {key = "f:" .. name, name = name, cat = tostring(tbl.cat or "Imported"),
-                                sub = tostring(tbl.sub or "Files"), def = def}
-                        end
-                    elseif ext == "lua" or ext == "txt" then
-                        for _, item in ipairs(parseLuaClips(raw)) do
-                            local name = item.name == "Imported" and base or item.name
-                            fileClips[#fileClips + 1] = {key = "f:" .. name, name = name, cat = "Imported", sub = "Files", clip = item.clip}
+                if ext == "json" or ext == "lua" or ext == "txt" then
+                    local ok, raw = pcall(readfile, path)
+                    if ok and type(raw) == "string" then
+                        if looksLikeLuaKeyframes(raw) then
+                            for _, item in ipairs(parseLuaClips(raw)) do
+                                local name = item.name == "Imported" and base or item.name
+                                fileClips[#fileClips + 1] = {key = "f:" .. name, name = name, cat = "Imported", sub = "Files", clip = item.clip}
+                            end
+                        else
+                            local okJ, tbl = pcall(function() return HttpService:JSONDecode(raw) end)
+                            local def = okJ and parseDef(tbl)
+                            if def then
+                                local name = tostring(tbl.name or base)
+                                fileClips[#fileClips + 1] = {key = "f:" .. name, name = name, cat = tostring(tbl.cat or "Imported"),
+                                    sub = tostring(tbl.sub or "Files"), def = def}
+                            end
                         end
                     end
                 end
@@ -1567,9 +1582,11 @@ local function importText(text, fallbackName)
     local cat, sub = trim(catBox.Text, "Custom"), trim(subBox.Text, "General")
     local typed = trim(nameBox.Text, nil)
     local entries = {}
-    if text:find("CFrame.new", 1, true) and text:find("Time%s*=") then
+    if looksLikeLuaKeyframes(text) then
         local found = parseLuaClips(text)
-        if #found == 0 then setStatus("No keyframes found"); return end
+        if #found == 0 then
+            setStatus(("No keyframes found in %d chars (file cut off?)"):format(#text)); return
+        end
         for _, item in ipairs(found) do
             local name = (#found == 1 and typed) or item.name
             if name == "Imported" then name = fallbackName or name end
@@ -1578,7 +1595,9 @@ local function importText(text, fallbackName)
         end
     else
         local ok, decoded = pcall(function() return HttpService:JSONDecode(text) end)
-        if not ok or type(decoded) ~= "table" then setStatus("Not valid keyframe data"); return end
+        if not ok or type(decoded) ~= "table" then
+            setStatus(("Not keyframes: got %d chars, no Time/CFrame or JSON found"):format(#text)); return
+        end
         local def, err = parseDef(decoded)
         if not def then setStatus(err or "Bad keyframes"); return end
         entries[1] = {name = typed or tostring(decoded.name or fallbackName or ("Imported " .. (#data.custom + 1))),
@@ -1597,8 +1616,16 @@ button(tabA, "Load file", 250, 72, 106, 30, function()
     if not hasFS then setStatus("No file access"); return end
     local path = trim(fileBox.Text, "")
     if path == "" then setStatus("Type a file name first"); return end
+    -- try the name as typed, inside Reanimlol/keyframes and Reanimlol, and with .lua/.json/.txt added
+    local candidates = {}
+    for _, base in ipairs({path, ROOT .. "/keyframes/" .. path, ROOT .. "/" .. path}) do
+        candidates[#candidates + 1] = base
+        if not base:match("%.%w+$") then
+            for _, ext in ipairs({".lua", ".json", ".txt"}) do candidates[#candidates + 1] = base .. ext end
+        end
+    end
     local text
-    for _, candidate in ipairs({path, ROOT .. "/keyframes/" .. path, ROOT .. "/" .. path}) do
+    for _, candidate in ipairs(candidates) do
         local ok, raw = pcall(function() if isfile(candidate) then return readfile(candidate) end end)
         if ok and type(raw) == "string" then text = raw; break end
     end
@@ -1609,7 +1636,7 @@ button(tabA, "Add pasted keyframes", 0, 206, 356, 30, function()
     if jsonBox.Text:match("^%s*$") then setStatus("Paste keyframes first"); return end
     importText(jsonBox.Text)
 end)
-label(tabA, "Big exports: save the file in your executor's workspace folder, type its name above and press Load file (or put it in Reanimlol/keyframes/ to load automatically). Supported: Lua tables of Time / Data / CFrame.new(...) per part, and the JSON pose format {\"duration\":1,\"keys\":[{\"t\":0,\"pose\":{\"RArm\":[0,0,5]}}]}.",
+label(tabA, "Big exports (over ~100k characters) can't be pasted: save the file in your executor's workspace folder, type its name above and press Load file (or put it in Reanimlol/keyframes/ to load automatically). Supported: Lua tables of Time / Data / CFrame.new(...) per part, and the JSON pose format {\"duration\":1,\"keys\":[{\"t\":0,\"pose\":{\"RArm\":[0,0,5]}}]}.",
     2, 242, 352, 74, {TextSize = 10, TextColor3 = C.dim, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top})
 
 -- Record tab ---------------------------------------------------------
