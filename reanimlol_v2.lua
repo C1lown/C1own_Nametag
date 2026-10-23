@@ -430,7 +430,7 @@ end
 
 local settings = {
     speed = 1, loop = true, stopOnMove = true, walkSync = true, blend = 0.15, recordRate = 20,
-    keyToggle = "RightControl", keyGui = "RightShift", keyStop = "X",
+    noclip = true, keyToggle = "RightControl", keyGui = "RightShift", keyStop = "X",
 }
 local data = {favorites = {}, custom = {}, states = {}, settings = settings}
 
@@ -954,7 +954,7 @@ local closeBtn = button(panel, "✕", 336, 7, 28, 24, function() if shared.Reani
 ----------------------------------------------------------------------
 -- Engine: state animations, emotes, blending, recording
 ----------------------------------------------------------------------
-local engine = {motors = {}, stateAnims = {}, gen = {}, token = 0, fadeT = 1, snapshot = {}, baked = {}}
+local engine = {motors = {}, stateAnims = {}, gen = {}, token = 0, fadeT = 1, snapshot = {}, baked = {}, parts = {}, collide = {}}
 local rec = {on = false, clip = nil, t = 0, acc = 0, frames = 0}
 local updateRecUI
 
@@ -1029,6 +1029,11 @@ local function engineStep(dt)
     local copy = engine.copy
     if not copy or not copy.Parent then return end
     local hum, root = engine.hum, engine.root
+    if settings.noclip then -- noclip: the controlled body passes through walls and parts
+        for _, part in ipairs(engine.parts) do
+            if part.Parent and part.CanCollide then part.CanCollide = false end
+        end
+    end
     local e = engine.emote
     if e then
         e.age += dt
@@ -1100,6 +1105,15 @@ local function engineStart()
     for _, m in ipairs(copy:GetDescendants()) do
         if m:IsA("Motor6D") and m.Part1 then engine.motors[m.Part1.Name] = m end
     end
+    engine.parts, engine.collide = {}, {}
+    local function track(object)
+        if object:IsA("BasePart") and engine.collide[object] == nil then
+            engine.collide[object] = object.CanCollide -- remembered so turning noclip off restores it
+            engine.parts[#engine.parts + 1] = object
+        end
+    end
+    for _, object in ipairs(copy:GetDescendants()) do track(object) end
+    engine.partConn = copy.DescendantAdded:Connect(track)
     engine.current, engine.emote, engine.stateAnims, engine.gen, engine.snapshot, engine.fadeT = nil, nil, {}, {}, {}, 1
     rigLabel.Text = engine.rig
     for _, s in ipairs(STATES) do refreshState(s) end
@@ -1108,6 +1122,8 @@ end
 
 local function engineStop()
     if engine.conn then engine.conn:Disconnect(); engine.conn = nil end
+    if engine.partConn then engine.partConn:Disconnect(); engine.partConn = nil end
+    engine.parts, engine.collide = {}, {}
     engine.copy, engine.hum, engine.root, engine.current, engine.emote = nil, nil, nil, nil, nil
     engine.motors, engine.stateAnims = {}, {}
     engine.token += 1
@@ -1804,10 +1820,18 @@ local function bindRow(text, key, y)
     end)
     ui.bindBtn[key] = b
 end
-bindRow("Toggle reanim key", "keyToggle", 102)
-bindRow("Hide / show GUI key", "keyGui", 136)
-bindRow("Stop emote key", "keyStop", 170)
-button(tabG, "Reset saved data", 0, 214, 356, 30, function()
+label(tabG, "Noclip while reanimated", 4, 102, 280, 30)
+switch(tabG, UDim2.fromOffset(306, 105), settings.noclip, function(v)
+    settings.noclip = v
+    saveSoon()
+    if not v then -- put collisions back the way they were
+        for part, can in pairs(engine.collide) do if part.Parent then part.CanCollide = can end end
+    end
+end)
+bindRow("Toggle reanim key", "keyToggle", 136)
+bindRow("Hide / show GUI key", "keyGui", 170)
+bindRow("Stop emote key", "keyStop", 204)
+button(tabG, "Reset saved data", 0, 246, 356, 30, function()
     data.favorites, data.custom, data.states = {}, {}, {}
     saveData()
     ui.main, ui.sub, ui.selected = "All", "All", nil
@@ -1815,7 +1839,7 @@ button(tabG, "Reset saved data", 0, 214, 356, 30, function()
     for _, s in ipairs(STATES) do refreshState(s) end
     setStatus("Data reset")
 end)
-label(tabG, "Esc cancels a rebind. Hotkeys are ignored while typing in a text box.", 4, 252, 350, 30,
+label(tabG, "Esc cancels a rebind. Hotkeys are ignored while typing in a text box.", 4, 284, 350, 30,
     {TextSize = 10, TextColor3 = C.dim, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top})
 
 -- Footer (speed / stop / loop) ----------------------------------------
