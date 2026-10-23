@@ -4,7 +4,7 @@
 -- library, recorder and importer are from v4/v5. Saved data goes to the "Reanimlol" folder when your
 -- executor supports writefile.
 
-warn("=== reanimlol V10.2 (Novoline skin, Play / Live / Tricks) loaded ===")
+warn("=== reanimlol V10.4 (red skin, Play / Live / Tricks) loaded ===")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
@@ -297,7 +297,7 @@ local function ensureFolder(path)
 end
 
 local settings = {
-    speed = 1, loop = true, stopOnMove = true, walkSync = true, blend = 0.15, recordRate = 20,
+    speed = 1, loop = true, stopOnMove = false, walkSync = true, blend = 0.15, recordRate = 20,
     noclip = true, keyToggle = "RightControl", keyGui = "RightShift", keyStop = "X",
     keySpeedDown = "Minus", keySpeedUp = "Equals", keySpeedReset = "Zero",
     keyPause = "Y", keyRewind = "U", keyReverse = "I", keyDrive = "LeftAlt",
@@ -322,6 +322,7 @@ do -- load
         end
     end
 end
+settings.stopOnMove = false
 
 local function saveData()
     if not hasFS then return end
@@ -666,11 +667,10 @@ end
 -- GUI skeleton (needed by engine for status text)
 ----------------------------------------------------------------------
 local C = {
-    -- Novoline layout, red palette: near-black wine glass, one crimson accent with white text on top of it
-    bg = Color3.fromRGB(20, 10, 11), field = Color3.fromRGB(38, 24, 26), sel = Color3.fromRGB(78, 34, 38),
-    text = Color3.fromRGB(246, 240, 240), dim = Color3.fromRGB(176, 150, 152),
-    accent = Color3.fromRGB(230, 57, 70), off = Color3.fromRGB(66, 44, 47), list = Color3.fromRGB(26, 14, 15),
-    stroke = Color3.fromRGB(96, 40, 46), div = Color3.fromRGB(58, 32, 35), card = Color3.fromRGB(40, 24, 27),
+    bg = Color3.fromRGB(30, 6, 9), field = Color3.fromRGB(66, 18, 24), sel = Color3.fromRGB(128, 28, 38),
+    text = Color3.fromRGB(255, 244, 244), dim = Color3.fromRGB(218, 150, 156),
+    accent = Color3.fromRGB(255, 48, 64), off = Color3.fromRGB(104, 34, 40), list = Color3.fromRGB(38, 8, 12),
+    stroke = Color3.fromRGB(220, 56, 68), div = Color3.fromRGB(120, 38, 46), card = Color3.fromRGB(78, 20, 27),
     green = Color3.fromRGB(80, 210, 100), gold = Color3.fromRGB(255, 200, 40), ink = Color3.fromRGB(255, 255, 255),
     danger = Color3.fromRGB(255, 130, 120),
 }
@@ -808,20 +808,20 @@ gui.Name, gui.ResetOnSpawn = "Reanimlol", false
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 gui.Parent = player:WaitForChild("PlayerGui")
 local PANEL_W, PANEL_H, BAR_H = 392, 534, 44
+local PANEL_ALPHA = 0.22
 local panel = T("Frame", {Size = UDim2.fromOffset(PANEL_W, PANEL_H), Position = UDim2.new(0.5, -PANEL_W / 2, 0.5, -PANEL_H / 2),
     BackgroundColor3 = Color3.new(1, 1, 1), Active = true}, gui)
 corner(panel, 14)
 do
-    -- Novoline glass: dark vertical gradient body, hairline white rim, soft top shine, dark drop glow
     local stroke = Instance.new("UIStroke")
     stroke.Color, stroke.Thickness, stroke.Transparency, stroke.ApplyStrokeMode = C.stroke, 1, .45, Enum.ApplyStrokeMode.Border
     stroke.Parent = panel
     local grad = Instance.new("UIGradient")
     grad.Rotation = 90
     grad.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(40, 16, 19)),
-        ColorSequenceKeypoint.new(0.45, Color3.fromRGB(20, 9, 11)),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(10, 4, 5)),
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(110, 14, 24)),
+        ColorSequenceKeypoint.new(0.45, Color3.fromRGB(58, 8, 14)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(24, 3, 6)),
     })
     grad.Parent = panel
     pcall(function()
@@ -835,7 +835,7 @@ panelScale.Scale = .9
 panelScale.Parent = panel
 panel.BackgroundTransparency = 1
 tween(panelScale, {Scale = 1}, TweenInfo.new(.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out))
-tween(panel, {BackgroundTransparency = 0}, TweenInfo.new(.3))
+tween(panel, {BackgroundTransparency = PANEL_ALPHA}, TweenInfo.new(.3))
 local dragBar = T("Frame", {Size = UDim2.new(1, 0, 0, BAR_H), BackgroundTransparency = 1}, panel)
 local title = label(dragBar, "reanimlol", 18, 0, 200, BAR_H, {Font = Enum.Font.GothamBold, TextSize = 18,
     TextTruncate = Enum.TextTruncate.AtEnd})
@@ -1294,31 +1294,54 @@ local CELL = 1 / #tabNames
 local tabBar = T("Frame", {Position = UDim2.fromOffset(18, TAB_BAR_Y), Size = UDim2.fromOffset(PANEL_W - 36, TAB_BAR_H),
     BackgroundTransparency = 1}, panel)
 local tabPill = T("Frame", {Position = UDim2.new(0, TAB_PAD, 0, TAB_PAD), Size = UDim2.new(CELL, -TAB_PAD * 2, 1, -TAB_PAD * 2),
-    BackgroundColor3 = Color3.fromRGB(150, 40, 50), BackgroundTransparency = .35}, tabBar)
+    BackgroundColor3 = Color3.fromRGB(230, 40, 58), BackgroundTransparency = .25}, tabBar)
 corner(tabPill, 8)
 local currentTab, tabToken = "Emotes", 0
 local function showTab(name)
-    local first = (tabFrames[name].Visible == false and name == currentTab)
+    if name == currentTab and tabFrames[name].Visible then return end
     tabToken += 1
     local token = tabToken
-    local dir = (tabOrder[name] >= tabOrder[currentTab]) and 1 or -1
     local old = currentTab
+    local dir = (tabOrder[name] >= tabOrder[old]) and 1 or -1
     currentTab = name
     for n, b in pairs(tabButtons) do
         tween(b, {TextColor3 = n == name and C.text or C.dim})
     end
-    tween(tabPill, {Position = UDim2.new(CELL * (tabOrder[name] - 1), TAB_PAD, 0, TAB_PAD)}, TweenInfo.new(.35, Enum.EasingStyle.Quint, Enum.EasingDirection.Out))
+    local lo, span = math.min(tabOrder[old], tabOrder[name]), math.abs(tabOrder[name] - tabOrder[old])
+    tween(tabPill, {Position = UDim2.new(CELL * (lo - 1), TAB_PAD, 0, TAB_PAD),
+        Size = UDim2.new(CELL * (span + 1), -TAB_PAD * 2, 1, -TAB_PAD * 2)},
+        TweenInfo.new(.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out))
+    task.delay(.13, function()
+        if token ~= tabToken or destroyed then return end
+        tween(tabPill, {Position = UDim2.new(CELL * (tabOrder[name] - 1), TAB_PAD, 0, TAB_PAD),
+            Size = UDim2.new(CELL, -TAB_PAD * 2, 1, -TAB_PAD * 2)},
+            TweenInfo.new(.38, Enum.EasingStyle.Back, Enum.EasingDirection.Out))
+    end)
     for n, f in pairs(tabFrames) do
         if n == name then
             f.Visible = true
-            if old ~= name or first then
-                f.Position = UDim2.fromOffset(TAB_X + 22 * dir, TAB_Y)
-                f.GroupTransparency = 1
-                tween(f, {Position = UDim2.fromOffset(TAB_X, TAB_Y), GroupTransparency = 0}, TweenInfo.new(.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out))
+            f.Position = UDim2.fromOffset(TAB_X + 34 * dir, TAB_Y)
+            f.GroupTransparency = 1
+            tween(f, {Position = UDim2.fromOffset(TAB_X, TAB_Y), GroupTransparency = 0},
+                TweenInfo.new(.42, Enum.EasingStyle.Quint, Enum.EasingDirection.Out))
+            local idx = 0
+            for _, child in ipairs(f:GetChildren()) do
+                if child:IsA("GuiObject") then
+                    local orig = child:GetAttribute("origPos")
+                    if not orig then orig = child.Position; child:SetAttribute("origPos", orig) end
+                    child.Position = orig + UDim2.fromOffset(0, 14)
+                    local delay = math.min(idx * 0.022, 0.26)
+                    idx += 1
+                    task.delay(delay, function()
+                        if destroyed or not child.Parent then return end
+                        tween(child, {Position = orig}, TweenInfo.new(.4, Enum.EasingStyle.Quint, Enum.EasingDirection.Out))
+                    end)
+                end
             end
         elseif f.Visible then
-            tween(f, {Position = UDim2.fromOffset(TAB_X - 22 * dir, TAB_Y), GroupTransparency = 1}, TweenInfo.new(.14, Enum.EasingStyle.Quad, Enum.EasingDirection.In))
-            task.delay(.15, function()
+            tween(f, {Position = UDim2.fromOffset(TAB_X - 26 * dir, TAB_Y), GroupTransparency = 1},
+                TweenInfo.new(.18, Enum.EasingStyle.Quad, Enum.EasingDirection.In))
+            task.delay(.19, function()
                 if token == tabToken and not destroyed then f.Visible = false end
             end)
         end
@@ -1381,7 +1404,6 @@ local KEYSHORT = {Zero = "0", One = "1", Two = "2", Three = "3", Four = "4", Fiv
     RightShift = "RShift", LeftAlt = "LAlt", RightAlt = "RAlt", Backquote = "`", Minus = "-", Equals = "=",
     LeftBracket = "[", RightBracket = "]", Semicolon = ";", Quote = "'", Comma = ",", Period = ".", Slash = "/"}
 local function keyLabel(name) return name and (KEYSHORT[name] or name) or "bind" end
--- Novoline-style library rows: no fill, soft light wash on hover / selection
 local function rowTint(row, selected)
     row:SetAttribute("restT", selected and .8 or 1)
     tween(row, {BackgroundTransparency = selected and .8 or 1}, TweenInfo.new(.2))
@@ -1878,7 +1900,7 @@ button(tabG, "Reset saved data", 0, 286, 356, 28, function()
 end)
 
 ----------------------------------------------------------------------
--- Play / Live / Tricks tabs (Novoline-style transport, live limb control and body tricks)
+-- Play / Live / Tricks tabs (transport, live limb control and body tricks)
 ----------------------------------------------------------------------
 local ctl = {}
 local function toggleRow(parent, text, y, initial, cb)
