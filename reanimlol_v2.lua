@@ -1,10 +1,11 @@
+-- Author: c1lown
 -- reanimlol v10.3 (Novoline skin + Novoline-style Play / Live / Tricks tabs). The reanimation core is untouched.
 -- reanimlol v10.1: v7 GUI + ragdoll-remote reanimation core (the game's own ragdoll remote breaks your joints on the server)
 -- Body reanimation core is the one from your message__14_ file (unchanged). The GUI, keyframe
 -- library, recorder and importer are from v4/v5. Saved data goes to the "Reanimlol" folder when your
 -- executor supports writefile.
 
-warn("=== reanimlol V10.4 (red skin, Play / Live / Tricks) loaded ===")
+warn("=== reanimlol V10.4 by c1lown (Play / Live / Tricks) loaded ===")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
