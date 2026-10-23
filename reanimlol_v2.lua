@@ -1225,14 +1225,14 @@ stopEmote = function()
     engine.emote = nil
 end
 
-local function startEmote(anim, name)
+local function startEmote(anim, name, key)
     if anim.rig and anim.rig ~= engine.rig then
         setStatus(anim.rig .. " animation on " .. engine.rig .. " rig"); return false
     end
     local matched = 0
     for n in pairs(engine.motors) do if anim.curves[n] then matched += 1 end end
     if matched == 0 then setStatus("Animation doesn't match rig"); return false end
-    engine.emote = {anim = anim, loop = settings.loop and not anim.hold, age = 0, name = name}
+    engine.emote = {anim = anim, loop = settings.loop and not anim.hold, age = 0, name = name, key = key}
     setStatus(name)
     return true
 end
@@ -1241,7 +1241,7 @@ playEntry = function(entry)
     turnOn(function()
         local anim = resolveAnim(entry)
         if not anim then setStatus("Can't play " .. entry.name); return end
-        startEmote(anim, entry.name)
+        startEmote(anim, entry.name, entry.key)
     end)
 end
 
@@ -1531,6 +1531,12 @@ rebuildList = function(animate)
                 if ui.selected and ui.rows[ui.selected.key] then setBase(ui.rows[ui.selected.key], C.field) end
                 ui.selected = e
                 setBase(row, C.sel)
+                -- clicking the animation that's already playing stops it
+                if engine.emote and engine.emote.key == e.key then
+                    stopEmote()
+                    setStatus("Stopped " .. e.name)
+                    return
+                end
                 playEntry(e)
             end)
         end
@@ -1567,25 +1573,99 @@ local function applyPack(pack)
     setStatus(pack.name .. " pack")
 end
 for i, pack in ipairs(PACKS) do chip(packRow, pack.name, false, i, function() applyPack(pack) end) end
+-- Dropdown picker: lists every clip (built-in, imported, recorded) with a search box.
+-- It lives inside the panel (not the clipped tab frame) and a big invisible catcher closes it on outside click.
+local dropCatcher, dropFrame
+local function closeDropdown()
+    if dropCatcher then dropCatcher:Destroy(); dropCatcher = nil end
+    if dropFrame then dropFrame:Destroy(); dropFrame = nil end
+end
+local function openDropdown(s, anchor)
+    closeDropdown()
+    local scale = math.max(panelScale.Scale, 0.01)
+    local rel = (anchor.AbsolutePosition - panel.AbsolutePosition) / scale
+    local w, h = 300, 200
+    local x = math.clamp(rel.X, 6, 380 - w - 6)
+    local y = rel.Y + anchor.AbsoluteSize.Y / scale + 2
+    if y + h > 464 then y = rel.Y - h - 2 end
+
+    dropCatcher = T("TextButton", {Size = UDim2.fromOffset(4000, 4000), Position = UDim2.fromOffset(-2000, -2000),
+        BackgroundTransparency = 1, Text = "", ZIndex = 9}, panel)
+    dropCatcher.Activated:Connect(closeDropdown)
+
+    local frame = T("Frame", {Position = UDim2.fromOffset(x, y), Size = UDim2.fromOffset(w, h),
+        BackgroundColor3 = C.bg, ZIndex = 10}, panel)
+    dropFrame = frame
+    corner(frame, 10)
+    local stroke = Instance.new("UIStroke")
+    stroke.Color, stroke.Thickness, stroke.ApplyStrokeMode = C.stroke, 1.5, Enum.ApplyStrokeMode.Border
+    stroke.Parent = frame
+    local searchBox = box(frame, "Search clips", 6, 6, w - 12, 26)
+    local listFrame = T("ScrollingFrame", {Position = UDim2.fromOffset(6, 38), Size = UDim2.fromOffset(w - 12, h - 44),
+        BackgroundColor3 = C.list, ScrollBarThickness = 4, CanvasSize = UDim2.new(),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y}, frame)
+    corner(listFrame, 8)
+    T("UIListLayout", {Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder}, listFrame)
+    T("UIPadding", {PaddingLeft = UDim.new(0, 3), PaddingRight = UDim.new(0, 3), PaddingTop = UDim.new(0, 3), PaddingBottom = UDim.new(0, 3)}, listFrame)
+
+    local function populate()
+        for _, c in ipairs(listFrame:GetChildren()) do if c:IsA("GuiObject") then c:Destroy() end end
+        local q = searchBox.Text:lower()
+        local order = 0
+        local current = stateEntry(s)
+        local function addRow(text, sub, active, cb)
+            order += 1
+            local row = T("TextButton", {Size = UDim2.new(1, -6, 0, 26), Text = "", LayoutOrder = order,
+                BackgroundColor3 = active and C.sel or C.field}, listFrame)
+            corner(row, 6)
+            label(row, text, 8, 0, 180, 26, {TextTruncate = Enum.TextTruncate.AtEnd})
+            label(row, sub, 190, 0, 84, 26, {TextSize = 10, TextColor3 = C.dim,
+                TextXAlignment = Enum.TextXAlignment.Right, TextTruncate = Enum.TextTruncate.AtEnd})
+            hoverable(row)
+            row.Activated:Connect(function() cb(); closeDropdown() end)
+        end
+        if q == "" then
+            addRow("↺ Default", DEFAULTS[s].name, data.states[s] == nil, function()
+                data.states[s] = nil; saveData(); refreshStateRows(); refreshState(s)
+                setStatus(cap(s) .. " = " .. DEFAULTS[s].name)
+            end)
+        end
+        -- clips whose name contains the state (e.g. "Walk") are listed first
+        local first, rest = {}, {}
+        for _, e in ipairs(getEntries()) do
+            local hay = (e.name .. " " .. e.sub .. " " .. e.cat):lower()
+            if q == "" or hay:find(q, 1, true) then
+                if e.name:lower():find(s, 1, true) then first[#first + 1] = e else rest[#rest + 1] = e end
+            end
+        end
+        for _, group in ipairs({first, rest}) do
+            for _, e in ipairs(group) do
+                addRow(e.name, e.sub, current and current.name == e.name, function() assignState(s, e) end)
+            end
+        end
+        if order == 0 then
+            addRow("No clips found", "", false, function() end)
+        end
+    end
+    searchBox:GetPropertyChangedSignal("Text"):Connect(populate)
+    populate()
+end
+
 for i, s in ipairs(STATES) do
     local y = 32 + (i - 1) * 36
     label(tabS, cap(s), 4, y, 56, 30)
-    local tb = box(tabS, "Clip name", 60, y, 226, 30)
+    local tb = button(tabS, "", 60, y, 226, 30, function() openDropdown(s, stateBoxes[s]) end)
+    tb.TextXAlignment = Enum.TextXAlignment.Left
+    tb.TextTruncate = Enum.TextTruncate.AtEnd
+    T("UIPadding", {PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 26)}, tb)
+    label(tb, "▼", 0, 0, 0, 30, {Size = UDim2.new(0, 20, 1, 0), Position = UDim2.new(1, -22, 0, 0),
+        TextXAlignment = Enum.TextXAlignment.Center, TextColor3 = C.dim, TextSize = 10})
     stateBoxes[s] = tb
     button(tabS, "Reset", 292, y, 64, 30, function()
         data.states[s] = nil; saveData(); refreshStateRows(); refreshState(s)
     end)
-    tb.FocusLost:Connect(function()
-        local text = tb.Text:match("^%s*(.-)%s*$"):lower()
-        if text == stateEntry(s).name:lower() then return end
-        for _, e in ipairs(getEntries()) do
-            if e.name:lower() == text then assignState(s, e); return end
-        end
-        setStatus("No clip with that name")
-        refreshStateRows()
-    end)
 end
-label(tabS, "Pick a pack, type a clip name from the library, or select an\nentry and use the buttons on the Emotes tab.", 4, 288, 350, 28,
+label(tabS, "Pick a pack, open a state's dropdown to choose any clip, or select an\nentry and use the buttons on the Emotes tab.", 4, 288, 350, 28,
     {TextSize = 10, TextColor3 = C.dim, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top})
 refreshStateRows = function()
     for _, s in ipairs(STATES) do stateBoxes[s].Text = stateEntry(s).name end
