@@ -8,7 +8,7 @@ local lp = Players.LocalPlayer
 
 -- The menu (GUI) exists ONLY for this exact Roblox username. Everyone else just gets the nametag.
 -- (Username only: display names can be changed by anyone, usernames can't.)
-local GUI_OWNER = "c1lown3"
+local GUI_OWNER = "C1lown3"
 local function canUseMenu()
     return lp.Name:lower() == GUI_OWNER
 end
