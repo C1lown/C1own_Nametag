@@ -1109,6 +1109,8 @@ local function engineStep(dt)
     if liveStep then
         local ok, err = pcall(liveStep, dt)
         if not ok and not engine.warnedLive then engine.warnedLive = true; warn("reanimlol live: " .. tostring(err)) end
+    local override = shared.ReanimlolOverride
+    if override then pcall(override, dt) end            
     end
     if rec.on then
         rec.t += dt
