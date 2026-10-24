@@ -2790,7 +2790,33 @@ end
 
 local lastLine
 local runLine
-
+local SCRIPT_BUTTONS = {
+    {
+        name = "AntiVC",
+        desc = "ANTIVC",
+        source = loadstring(game:HttpGet("https://scriptblox.com/raw/Universal-Script-Anti-Vc-Ban-225666"))()
+            print("hello from my script button")
+        ]],
+    },
+    {
+        name = "example2",
+        desc = "Runs a Lua function directly",
+        args = "[text]",
+        run = function(args)
+            print("you typed:", table.concat(args, " "))
+        end,
+    },
+   
+}
+for _, b in ipairs(SCRIPT_BUTTONS) do
+    def("Scripts", tostring(b.name):lower(), b.desc or "Custom script", b.args, function(args)
+        if b.run then return b.run(args) end
+        if type(loadstring) ~= "function" then say("Executor has no loadstring"); return end
+        local fn, err = loadstring(b.source or "")
+        if not fn then say("Script error: " .. tostring(err):sub(1, 60)); return end
+        fn()
+    end)
+end
 ----------------------------------------------------------------------
 -- Movement
 ----------------------------------------------------------------------
