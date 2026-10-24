@@ -4477,66 +4477,94 @@ do
     ------------------------------------------------------------------
     -- Player actions: headsit, behind, animcopy (+ Players panel)
     ------------------------------------------------------------------
-    local hs = {}
-    local function hsOff()
-        if hs.conn then hs.conn:Disconnect(); hs.conn = nil end
-        local h = hum()
-        if hs.on and h then h.Sit = false end
-        hs.on = false
+    local ac = {tracks = {}, cache = {char = nil, list = {}}}
+    local function acMotors()
+        local mc = lp.Character
+        if ac.cache.char ~= mc then
+            ac.cache.char, ac.cache.list = mc, {}
+            if mc then
+                for _, m in ipairs(mc:GetDescendants()) do
+                    if m:IsA("Motor6D") and m.Part0 and m.Part1 then ac.cache.list[#ac.cache.list + 1] = m end
+                end
+            end
+        end
+        return ac.cache.list
     end
-    pair("Teleport", "headsit", "unheadsit", "Sit on a player's head", "Get off the player's head", "<player>",
-        function(a)
-            hsOff()
-            local p = findPlayer(a[1])
-            if not p or p == lp then say("Player not found"); return end
-            hs.on = true
-            hs.conn = RunService.Heartbeat:Connect(function()
-                local c = p.Character
-                local head = c and c:FindFirstChild("Head")
-                local r, h = root(), hum()
-                if not (head and r and h) then return end
-                h.Sit = true
-                r.CFrame = head.CFrame * CFrame.new(0, head.Size.Y / 2 + 1.6, 0)
-                r.AssemblyLinearVelocity = Vector3.new()
-            end)
-        end, hsOff)
-
-    def("Teleport", "behind", "Teleport behind a player", "<player>", function(a)
-        local _, pr = targetRoot(a[1])
-        local r = root()
-        if not (pr and r) then say("Player not found"); return end
-        r.CFrame = pr.CFrame * CFrame.new(0, 0, 3)
-    end)
-
-    local ac = {tracks = {}}
+    -- Pose copy. Joint math: Part1 = Part0 * C0 * Transform * C1^-1, so Transform = (Part0 * C0)^-1 * Part1 * C1.
+    -- It only reads the target's part positions, so it works however they pose their body.
+    local function applyPose(dt)
+        local tc = ac.target and ac.target.Character
+        if not (tc and lp.Character) then return 0 end
+        local k = 1 - math.exp(-(dt or 1 / 60) * 35)
+        local n = 0
+        for _, m in ipairs(acMotors()) do
+            local p0, p1 = m.Part0, m.Part1
+            if p0 and p1 and m.Parent then
+                local t0, t1 = tc:FindFirstChild(p0.Name), tc:FindFirstChild(p1.Name)
+                if t0 and t1 and t0:IsA("BasePart") and t1:IsA("BasePart") then
+                    local want = (t0.CFrame * m.C0):Inverse() * t1.CFrame * m.C1
+                    m.Transform = m.Transform:Lerp(want, k)
+                    n += 1
+                end
+            end
+        end
+        return n
+    end
     local function acOff()
-        if ac.conn then ac.conn:Disconnect(); ac.conn = nil end
+        for _, key in ipairs({"conn", "render"}) do
+            if ac[key] then ac[key]:Disconnect(); ac[key] = nil end
+        end
+        if ac.hook and G.ReanimlolOverride == ac.hook then G.ReanimlolOverride = nil end
+        ac.hook, ac.target, ac.motor, ac.force = nil, nil, false, false
         for _, t in pairs(ac.tracks) do pcall(function() t:Stop(0.1) end) end
         ac.tracks = {}
+        if ac.usedMotor then
+            for _, m in ipairs(ac.cache.list) do
+                if m.Parent then pcall(function() m.Transform = CFrame.identity end) end
+            end
+        end
+        ac.usedMotor = false
+        ac.cache = {char = nil, list = {}}
         local c = lp.Character
         local an = c and c:FindFirstChild("Animate")
         if an and ac.hadAnimate then an.Disabled = false end
         ac.hadAnimate = false
     end
-    pair("Character", "animcopy", "unanimcopy", "Copy every animation a player is playing", "Stop copying animations", "<player>",
+    pair("Character", "animcopy", "unanimcopy", "Copy a player's animations or keyframe pose", "Stop copying animations", "<player> [motor]",
         function(a)
             acOff()
             local p = findPlayer(a[1])
             if not p or p == lp then say("Player not found"); return end
+            ac.target = p
+            ac.force = tostring(a[2] or ""):lower() == "motor"
             local c = lp.Character
             local an = c and c:FindFirstChild("Animate")
             if an and not an.Disabled then an.Disabled = true; ac.hadAnimate = true end
             local myH = hum()
             local myAn = myH and myH:FindFirstChildOfClass("Animator")
             if myAn then for _, t in ipairs(myAn:GetPlayingAnimationTracks()) do t:Stop(0) end end
-            ac.conn = RunService.Heartbeat:Connect(function()
-                local th = p.Character and p.Character:FindFirstChildOfClass("Humanoid")
+            -- while reanimated, the reanim engine calls this every step so the pose reaches your real (replicated) body
+            ac.hook = function(dt) if ac.motor then applyPose(dt) end end
+            G.ReanimlolOverride = ac.hook
+            ac.render = RunService.RenderStepped:Connect(function(dt) if ac.motor then applyPose(dt) end end)
+            ac.conn = RunService.Heartbeat:Connect(function(dt)
+                local tc = p.Character
+                local th = tc and tc:FindFirstChildOfClass("Humanoid")
                 local tan = th and th:FindFirstChildOfClass("Animator")
+                local tracks = tan and tan:GetPlayingAnimationTracks() or {}
+                local reanimBody = lp.Character and lp.Character.Name == "ReanimlolBody"
+                ac.motor = ac.force or reanimBody or #tracks == 0
+                if ac.motor then
+                    ac.usedMotor = true
+                    for id, tr in pairs(ac.tracks) do tr:Stop(0.1); ac.tracks[id] = nil end
+                    applyPose(dt)
+                    return
+                end
                 local mh = hum()
                 local man = mh and mh:FindFirstChildOfClass("Animator")
                 if not (tan and man) then return end
                 local seen = {}
-                for _, t in ipairs(tan:GetPlayingAnimationTracks()) do
+                for _, t in ipairs(tracks) do
                     local id = t.Animation and t.Animation.AnimationId
                     if id and id ~= "" then
                         seen[id] = true
@@ -4563,6 +4591,10 @@ do
                 end
             end)
         end, acOff)
+    def("Character", "kfcopy", "Copy a player's pose even if they use keyframes", "<player>", function(a)
+        runLine("animcopy " .. tostring(a[1] or "") .. " motor")
+    end, {"motorcopy"})
+    def("Character", "unkfcopy", "Stop keyframe pose copy", nil, function() runLine("unanimcopy") end, {"unmotorcopy"})
 
     ------------------------------------------------------------------
     -- Players panel
