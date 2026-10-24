@@ -1109,9 +1109,9 @@ local function engineStep(dt)
     if liveStep then
         local ok, err = pcall(liveStep, dt)
         if not ok and not engine.warnedLive then engine.warnedLive = true; warn("reanimlol live: " .. tostring(err)) end
-    local override = shared.ReanimlolOverride
-    if override then pcall(override, dt) end            
     end
+    local override = shared.ReanimlolOverride
+    if override then pcall(override, dt) end
     if rec.on then
         rec.t += dt
         rec.acc += dt
@@ -2790,11 +2790,17 @@ end
 
 local lastLine
 local runLine
+----------------------------------------------------------------------
+-- SCRIPT BUTTONS: edit this table to add your own buttons.
+-- Each one appears in Commands > Scripts and can also be run by typing its name.
+-- Use `source` for Lua code as text, or `run` for a function.
+-- Add `args = "<thing>"` and the button will fill the run bar so you can type arguments first.
+----------------------------------------------------------------------
 local SCRIPT_BUTTONS = {
     {
-        name = "AntiVC",
-        desc = "ANTIVC",
-        source = loadstring(game:HttpGet("https://scriptblox.com/raw/Universal-Script-Anti-Vc-Ban-225666"))()
+        name = "myscript",
+        desc = "Replace this with what your script does",
+        source = [[
             print("hello from my script button")
         ]],
     },
@@ -2806,7 +2812,8 @@ local SCRIPT_BUTTONS = {
             print("you typed:", table.concat(args, " "))
         end,
     },
-   
+    -- To load a script from a link you trust:
+    -- {name = "loader", desc = "Loads my script", source = [[ loadstring(game:HttpGet("https://example.com/script.lua"))() ]]},
 }
 for _, b in ipairs(SCRIPT_BUTTONS) do
     def("Scripts", tostring(b.name):lower(), b.desc or "Custom script", b.args, function(args)
@@ -2817,6 +2824,7 @@ for _, b in ipairs(SCRIPT_BUTTONS) do
         fn()
     end)
 end
+
 ----------------------------------------------------------------------
 -- Movement
 ----------------------------------------------------------------------
@@ -3824,6 +3832,7 @@ local C = {
         Movement = Color3.fromRGB(255, 96, 108), Character = Color3.fromRGB(255, 156, 96), Teleport = Color3.fromRGB(255, 205, 96),
         Camera = Color3.fromRGB(186, 136, 255), Visual = Color3.fromRGB(112, 204, 255), Tools = Color3.fromRGB(124, 232, 164),
         Server = Color3.fromRGB(96, 164, 255), Utility = Color3.fromRGB(224, 224, 236),
+        Scripts = Color3.fromRGB(255, 130, 210),
     },
 }
 for k, v in pairs(C) do if typeof(v) == "Color3" then C[k] = shiftC(v, Theme.hue) end end
@@ -4089,7 +4098,7 @@ say = function(text)
     end)
 end
 
-local catOrder = {"All", "Movement", "Character", "Teleport", "Camera", "Visual", "Tools", "Server", "Utility"}
+local catOrder = {"All", "Scripts", "Movement", "Character", "Teleport", "Camera", "Visual", "Tools", "Server", "Utility"}
 local curCat = "All"
 local rebuild, buildChips
 
@@ -4503,6 +4512,37 @@ do
     ------------------------------------------------------------------
     -- Player actions: headsit, behind, animcopy (+ Players panel)
     ------------------------------------------------------------------
+    local hs = {}
+    local function hsOff()
+        if hs.conn then hs.conn:Disconnect(); hs.conn = nil end
+        local h = hum()
+        if hs.on and h then h.Sit = false end
+        hs.on = false
+    end
+    pair("Teleport", "headsit", "unheadsit", "Sit on a player's head", "Get off the player's head", "<player>",
+        function(a)
+            hsOff()
+            local p = findPlayer(a[1])
+            if not p or p == lp then say("Player not found"); return end
+            hs.on = true
+            hs.conn = RunService.Heartbeat:Connect(function()
+                local c = p.Character
+                local head = c and c:FindFirstChild("Head")
+                local r, h = root(), hum()
+                if not (head and r and h) then return end
+                h.Sit = true
+                r.CFrame = head.CFrame * CFrame.new(0, head.Size.Y / 2 + 1.6, 0)
+                r.AssemblyLinearVelocity = Vector3.new()
+            end)
+        end, hsOff)
+
+    def("Teleport", "behind", "Teleport behind a player", "<player>", function(a)
+        local _, pr = targetRoot(a[1])
+        local r = root()
+        if not (pr and r) then say("Player not found"); return end
+        r.CFrame = pr.CFrame * CFrame.new(0, 0, 3)
+    end)
+
     local ac = {tracks = {}, cache = {char = nil, list = {}}}
     local function acMotors()
         local mc = lp.Character
