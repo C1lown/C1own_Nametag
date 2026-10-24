@@ -1,6 +1,50 @@
 -- Author: c1lown
 -- c1lown hub: reanimlol GUI + commands panel
 
+----------------------------------------------------------------------
+-- Theme helpers (hue shift based; saved between runs)
+----------------------------------------------------------------------
+local Theme = {hue = 0}
+local THEMES = {
+    {"Crimson", 0}, {"Ember", 0.06}, {"Gold", 0.11}, {"Emerald", 0.37}, {"Teal", 0.50},
+    {"Ocean", 0.60}, {"Indigo", 0.70}, {"Violet", 0.77}, {"Pink", 0.88},
+}
+do
+    local g = getgenv and getgenv() or _G
+    if type(g.C1lownThemeHue) == "number" then
+        Theme.hue = g.C1lownThemeHue
+    elseif type(readfile) == "function" and type(isfile) == "function" then
+        pcall(function()
+            if isfile("C1lownHub_theme.txt") then Theme.hue = tonumber(readfile("C1lownHub_theme.txt")) or 0 end
+        end)
+    end
+end
+local function shiftC(c, d)
+    if d == 0 then return c end
+    local h, s, v = c:ToHSV()
+    if s < 0.02 then return c end
+    return Color3.fromHSV((h + d) % 1, s, v)
+end
+local function hc(c) return shiftC(c, Theme.hue) end
+local function recolor(root, d)
+    if d % 1 == 0 then return end
+    for _, o in ipairs(root:GetDescendants()) do
+        if o:IsA("GuiObject") then o.BackgroundColor3 = shiftC(o.BackgroundColor3, d) end
+        if o:IsA("TextLabel") or o:IsA("TextButton") or o:IsA("TextBox") then o.TextColor3 = shiftC(o.TextColor3, d) end
+        if o:IsA("TextBox") then o.PlaceholderColor3 = shiftC(o.PlaceholderColor3, d) end
+        if o:IsA("ImageLabel") or o:IsA("ImageButton") then o.ImageColor3 = shiftC(o.ImageColor3, d) end
+        if o:IsA("ScrollingFrame") then o.ScrollBarImageColor3 = shiftC(o.ScrollBarImageColor3, d) end
+        if o:IsA("UIStroke") then o.Color = shiftC(o.Color, d) end
+        if o:IsA("UIGradient") then
+            local kps = {}
+            for i, k in ipairs(o.Color.Keypoints) do kps[i] = ColorSequenceKeypoint.new(k.Time, shiftC(k.Value, d)) end
+            o.Color = ColorSequence.new(kps)
+        end
+        local b = o:GetAttribute("base")
+        if typeof(b) == "Color3" then o:SetAttribute("base", shiftC(b, d)) end
+    end
+end
+
 local function ReanimlolModule()
 -- reanimlol v10.3 (Novoline skin + Novoline-style Play / Live / Tricks tabs). The reanimation core is untouched.
 -- reanimlol v10.1: v7 GUI + ragdoll-remote reanimation core (the game's own ragdoll remote breaks your joints on the server)
@@ -679,6 +723,7 @@ local C = {
     green = Color3.fromRGB(80, 210, 100), gold = Color3.fromRGB(255, 200, 40), ink = Color3.fromRGB(255, 255, 255),
     danger = Color3.fromRGB(255, 130, 120),
 }
+for k, v in pairs(C) do C[k] = shiftC(v, Theme.hue) end
 local EASE = TweenInfo.new(.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
 local function tween(o, props, info)
     local t = TweenService:Create(o, info or EASE, props)
@@ -824,9 +869,9 @@ do
     local grad = Instance.new("UIGradient")
     grad.Rotation = 90
     grad.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(110, 14, 24)),
-        ColorSequenceKeypoint.new(0.45, Color3.fromRGB(58, 8, 14)),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(24, 3, 6)),
+        ColorSequenceKeypoint.new(0, hc(Color3.fromRGB(110, 14, 24))),
+        ColorSequenceKeypoint.new(0.45, hc(Color3.fromRGB(58, 8, 14))),
+        ColorSequenceKeypoint.new(1, hc(Color3.fromRGB(24, 3, 6))),
     })
     grad.Parent = panel
     pcall(function()
@@ -1299,7 +1344,7 @@ local CELL = 1 / #tabNames
 local tabBar = T("Frame", {Position = UDim2.fromOffset(18, TAB_BAR_Y), Size = UDim2.fromOffset(PANEL_W - 36, TAB_BAR_H),
     BackgroundTransparency = 1}, panel)
 local tabPill = T("Frame", {Position = UDim2.new(0, TAB_PAD, 0, TAB_PAD), Size = UDim2.new(CELL, -TAB_PAD * 2, 1, -TAB_PAD * 2),
-    BackgroundColor3 = Color3.fromRGB(230, 40, 58), BackgroundTransparency = .25}, tabBar)
+    BackgroundColor3 = hc(Color3.fromRGB(230, 40, 58)), BackgroundTransparency = .25}, tabBar)
 corner(tabPill, 8)
 local currentTab, tabToken = "Emotes", 0
 local function showTab(name)
@@ -2635,6 +2680,7 @@ cleanup = function()
     bodyReanim.Stop()
     for _, c in ipairs(connections) do pcall(function() c:Disconnect() end) end
     if shared.ReanimlolCleanup == cleanup then shared.ReanimlolCleanup = nil end
+    shared.ReanimlolTheme = nil
     gui:Destroy()
 end
 shared.ReanimlolCleanup = cleanup
@@ -2643,6 +2689,11 @@ refreshChips()
 rebuildList()
 refreshStateRows()
 updateRecUI()
+shared.ReanimlolTheme = function(d)
+    if destroyed then return end
+    for k, v in pairs(C) do C[k] = shiftC(v, d) end
+    recolor(gui, d)
+end
 return {Destroy = cleanup}
 end
 
@@ -3747,6 +3798,8 @@ local C = {
         Server = Color3.fromRGB(96, 164, 255), Utility = Color3.fromRGB(224, 224, 236),
     },
 }
+for k, v in pairs(C) do if typeof(v) == "Color3" then C[k] = shiftC(v, Theme.hue) end end
+for k, v in pairs(C.cat) do C.cat[k] = shiftC(v, Theme.hue) end
 local function tween(o, props, info)
     local t = TweenService:Create(o, info or TweenInfo.new(.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), props)
     t:Play()
@@ -3776,9 +3829,9 @@ local function glass(frame, radius)
     local g = Instance.new("UIGradient")
     g.Rotation = 115
     g.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(104, 14, 28)),
-        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(52, 8, 16)),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(20, 3, 8)),
+        ColorSequenceKeypoint.new(0, hc(Color3.fromRGB(104, 14, 28))),
+        ColorSequenceKeypoint.new(0.5, hc(Color3.fromRGB(52, 8, 16))),
+        ColorSequenceKeypoint.new(1, hc(Color3.fromRGB(20, 3, 8))),
     })
     g.Parent = frame
     local st = Instance.new("UIStroke")
@@ -3786,8 +3839,8 @@ local function glass(frame, radius)
     local sg = Instance.new("UIGradient")
     sg.Color = ColorSequence.new({
         ColorSequenceKeypoint.new(0, C.accent2),
-        ColorSequenceKeypoint.new(0.35, Color3.fromRGB(110, 18, 30)),
-        ColorSequenceKeypoint.new(0.65, Color3.fromRGB(110, 18, 30)),
+        ColorSequenceKeypoint.new(0.35, hc(Color3.fromRGB(110, 18, 30))),
+        ColorSequenceKeypoint.new(0.65, hc(Color3.fromRGB(110, 18, 30))),
         ColorSequenceKeypoint.new(1, C.accent2),
     })
     sg.Parent = st
@@ -3851,7 +3904,7 @@ gui.Parent = lp:WaitForChild("PlayerGui")
 
 -- toast notifications (replace the plain status text)
 local toastF = mk("Frame", {Size = UDim2.fromOffset(360, 40), AnchorPoint = Vector2.new(.5, 1), Position = UDim2.new(.5, 0, 1, -20),
-    BackgroundColor3 = Color3.fromRGB(34, 6, 12), BackgroundTransparency = 1, Visible = false, ZIndex = 50}, gui)
+    BackgroundColor3 = hc(Color3.fromRGB(34, 6, 12)), BackgroundTransparency = 1, Visible = false, ZIndex = 50}, gui)
 corner(toastF, 20)
 local toastStroke = Instance.new("UIStroke")
 toastStroke.Color, toastStroke.Thickness, toastStroke.ApplyStrokeMode = C.accent, 1.4, Enum.ApplyStrokeMode.Border
@@ -3862,7 +3915,7 @@ local toastL = mk("TextLabel", {Text = "", TextSize = 13, Font = Enum.Font.Gotha
     Size = UDim2.new(1, -48, 1, 0), TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = 51}, toastF)
 
 -- hub bar
-local BAR_W, BAR_H = 428, 54
+local BAR_W, BAR_H = 500, 54
 local bar = mk("Frame", {Size = UDim2.fromOffset(BAR_W, BAR_H), Position = UDim2.new(0.5, -BAR_W / 2, 0, 14),
     BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = .16, Active = true}, gui)
 glass(bar, 27)
@@ -3876,7 +3929,7 @@ corner(logo, 18)
 do
     local lg = Instance.new("UIGradient")
     lg.Rotation = 45
-    lg.Color = ColorSequence.new(C.accent2, Color3.fromRGB(190, 20, 44))
+    lg.Color = ColorSequence.new(C.accent2, hc(Color3.fromRGB(190, 20, 44)))
     lg.Parent = logo
 end
 mk("TextLabel", {Text = "c1", Font = Enum.Font.GothamBlack, TextSize = 15, Size = UDim2.fromScale(1, 1)}, logo)
@@ -3900,9 +3953,43 @@ end
 local reanimBtn = barBtn("Reanim", 122, 74)
 local cmdBtn = barBtn("Commands", 200, 92)
 local playersBtn = barBtn("Players", 296, 78)
-local closeBtn = barBtn("X", 384, 34)
+local closeBtn = barBtn("X", 456, 34)
 closeBtn.BackgroundColor3 = C.accent
 closeBtn.BackgroundTransparency = 0
+
+-- theme button + commands (hue-shifts every GUI color, saved between runs)
+local themeBtn = barBtn("Theme", 378, 70)
+local function applyTheme(hue)
+    hue = hue % 1
+    local d = (hue - Theme.hue) % 1
+    Theme.hue = hue
+    G.C1lownThemeHue = hue
+    pcall(function() if writefile then writefile("C1lownHub_theme.txt", tostring(hue)) end end)
+    if d < 1e-4 then return end
+    for k, v in pairs(C) do if typeof(v) == "Color3" then C[k] = shiftC(v, d) end end
+    for k, v in pairs(C.cat) do C.cat[k] = shiftC(v, d) end
+    recolor(gui, d)
+    if type(G.ReanimlolTheme) == "function" then pcall(G.ReanimlolTheme, d) end
+end
+themeBtn.Activated:Connect(function()
+    local idx = 0
+    for i, t in ipairs(THEMES) do if math.abs(t[2] - Theme.hue) < 0.001 then idx = i end end
+    local nxt = THEMES[idx % #THEMES + 1]
+    applyTheme(nxt[2])
+    say("Theme: " .. nxt[1])
+end)
+def("Utility", "theme", "Set GUI theme by name (no name lists them)", "[name]", function(a)
+    local want = tostring(a[1] or ""):lower()
+    for _, t in ipairs(THEMES) do
+        if t[1]:lower() == want then applyTheme(t[2]); say("Theme: " .. t[1]); return end
+    end
+    local names = {}
+    for _, t in ipairs(THEMES) do names[#names + 1] = t[1] end
+    say(table.concat(names, ", "))
+end)
+def("Utility", "themehue", "Custom theme: hue shift 0-360 (0 = crimson)", "<0-360>", function(a)
+    applyTheme(num(a[1], 0) / 360)
+end)
 
 -- commands panel
 local PW, PH = 460, 520
@@ -3944,7 +4031,7 @@ corner(runBtn, 18)
 do
     local rg = Instance.new("UIGradient")
     rg.Rotation = 20
-    rg.Color = ColorSequence.new(C.accent2, Color3.fromRGB(200, 24, 48))
+    rg.Color = ColorSequence.new(C.accent2, hc(Color3.fromRGB(200, 24, 48)))
     rg.Parent = runBtn
 end
 press(runBtn)
@@ -4153,44 +4240,130 @@ do
             for _, o in ipairs({cc, bl, sr}) do o.Parent = Lighting; shade[#shade + 1] = o end
         end, shadersOff)
 
-    -- Baseplate
-    local bps = {}
-    local function bpOff()
-        for _, p in ipairs(bps) do p:Destroy() end
-        bps = {}
+    -- Baseplates (optimized + custom image)
+    local function httpGet(url)
+        local ok, res = pcall(function() return game:HttpGet(url) end)
+        if ok and type(res) == "string" then return res end
+        local req = (syn and syn.request) or http_request or request
+        if req then
+            local ok2, r = pcall(req, {Url = url, Method = "GET"})
+            if ok2 and r and r.Body then return r.Body end
+        end
     end
-    pair("Visual", "baseplate", "unbaseplate", "Spawn a big baseplate under you", "Remove spawned baseplates", "[size]",
+    local imgCache = {}
+    local function resolveImage(src)
+        src = tostring(src or "")
+        if tonumber(src) then return "rbxassetid://" .. src end
+        if src:match("^rbxassetid://") or src:match("^rbxasset://") or src:match("^rbxthumb://") then return src end
+        local id = src:match("roblox%.com/asset/?%?id=(%d+)")
+        if id then return "rbxassetid://" .. id end
+        if not src:match("^https?://") then say("Give a link, image ID or rbxassetid"); return nil end
+        if imgCache[src] then return imgCache[src] end
+        local gca = getcustomasset or getsynasset
+        if not (gca and type(writefile) == "function") then say("Executor can't load web images (needs getcustomasset)"); return nil end
+        local body = httpGet(src)
+        if type(body) ~= "string" or #body < 32 then say("Couldn't download that link"); return nil end
+        local ext = ".png"
+        if body:sub(1, 2) == "\255\216" then ext = ".jpg"
+        elseif body:sub(1, 4) ~= "\137PNG" then say("Link must be a direct .png or .jpg"); return nil end
+        local h = 5381
+        for i = 1, #src do h = (h * 33 + src:byte(i)) % 4294967296 end
+        pcall(function() if type(isfolder) == "function" and not isfolder("C1lownHub") then makefolder("C1lownHub") end end)
+        local path = "C1lownHub/img_" .. h .. ext
+        if not pcall(writefile, path, body) then say("Couldn't save image"); return nil end
+        local okA, asset = pcall(gca, path)
+        if not okA or not asset then say("Couldn't load image"); return nil end
+        imgCache[src] = asset
+        return asset
+    end
+
+    local bp = {fixed = {}, inf = nil, img = nil, tile = 16, color = nil}
+    local function effTile(size) return math.max(bp.tile, size / 128) end -- caps tiles per side (lag guard)
+    local function styleOne(p)
+        for _, o in ipairs(p:GetChildren()) do
+            if o:IsA("Texture") or o:IsA("Decal") then o:Destroy() end
+        end
+        if not bp.img then return end
+        if bp.tile <= 0 then -- stretch one copy across the whole plate
+            local d = Instance.new("Decal")
+            d.Face, d.Texture = Enum.NormalId.Top, bp.img
+            d.Parent = p
+        else
+            local t = Instance.new("Texture")
+            local tile = effTile(p.Size.X)
+            t.Face, t.Texture, t.StudsPerTileU, t.StudsPerTileV = Enum.NormalId.Top, bp.img, tile, tile
+            t.Parent = p
+        end
+    end
+    local function styleAll()
+        for _, p in ipairs(bp.fixed) do if p.Parent then styleOne(p) end end
+        if bp.inf and bp.inf.Parent then styleOne(bp.inf) end
+    end
+    local function newPart(size, cf)
+        local p = Instance.new("Part")
+        p.Name, p.Anchored, p.Size, p.Material = "C1Baseplate", true, Vector3.new(size, 2, size), Enum.Material.SmoothPlastic
+        p.Color = bp.color or hc(Color3.fromRGB(70, 20, 26))
+        p.TopSurface, p.BottomSurface = Enum.SurfaceType.Smooth, Enum.SurfaceType.Smooth
+        p.CastShadow, p.CanTouch, p.Locked = false, false, true
+        p.CFrame = cf
+        styleOne(p)
+        p.Parent = workspace
+        return p
+    end
+    local function floorY(r, h) return r.Position.Y - (h.HipHeight + r.Size.Y / 2) - 1 end
+
+    local function bpOff()
+        for _, p in ipairs(bp.fixed) do p:Destroy() end
+        bp.fixed = {}
+    end
+    pair("Visual", "baseplate", "unbaseplate", "Spawn a baseplate under you", "Remove spawned baseplates", "[size]",
         function(a)
             local r, h = root(), hum()
             if not (r and h) then say("Character not ready"); return end
-            local size = math.clamp(num(a[1], 2048), 16, 20000)
-            local y = r.Position.Y - (h.HipHeight + r.Size.Y / 2) - 1
-            local p = Instance.new("Part")
-            p.Name, p.Anchored, p.Size, p.Material = "C1Baseplate", true, Vector3.new(size, 2, size), Enum.Material.Plastic
-            p.Color = Color3.fromRGB(70, 20, 26)
-            p.TopSurface, p.BottomSurface = Enum.SurfaceType.Smooth, Enum.SurfaceType.Smooth
-            p.CFrame = CFrame.new(r.Position.X, y, r.Position.Z)
-            p.Parent = workspace
-            bps[#bps + 1] = p
+            local size = math.clamp(num(a[1], 1024), 16, 20000)
+            bp.fixed[#bp.fixed + 1] = newPart(size, CFrame.new(r.Position.X, floorY(r, h), r.Position.Z))
         end, bpOff)
 
-    -- Infinite baseplate
-    local ibp
-    local function ibpOff() stopLoop("ibp"); if ibp then ibp:Destroy(); ibp = nil end end
-    pair("Visual", "infbaseplate", "uninfbaseplate", "Spawn a baseplate that follows you", "Remove the baseplate", nil,
-        function()
+    local function ibpOff() stopLoop("ibp"); if bp.inf then bp.inf:Destroy(); bp.inf = nil end end
+    pair("Visual", "infbaseplate", "uninfbaseplate", "Spawn a baseplate that follows you", "Remove the baseplate", "[size]",
+        function(a)
             ibpOff()
-            local r = root()
-            if not r then return end
-            ibp = Instance.new("Part")
-            ibp.Name, ibp.Anchored, ibp.Size, ibp.Material, ibp.Color = "C1Baseplate", true, Vector3.new(2048, 2, 2048), Enum.Material.Plastic, Color3.fromRGB(70, 20, 26)
-            local y = r.Position.Y - 4
-            ibp.Parent = workspace
-            startLoop("ibp", 0.1, function()
-                local rr = root()
-                if rr and ibp then ibp.CFrame = CFrame.new(rr.Position.X, y, rr.Position.Z) end
+            local r, h = root(), hum()
+            if not (r and h) then say("Character not ready"); return end
+            local size = math.clamp(num(a[1], 1024), 64, 4096)
+            bp.inf = newPart(size, CFrame.new(r.Position.X, floorY(r, h), r.Position.Z))
+            startLoop("ibp", 0.25, function()
+                local rr, part = root(), bp.inf
+                if not (rr and part and part.Parent) then return end
+                local c, p = part.Position, rr.Position
+                local dx, dz = p.X - c.X, p.Z - c.Z
+                if dx * dx + dz * dz < (size * 0.2) ^ 2 then return end -- only move when you've drifted
+                local step = bp.tile > 0 and effTile(size) or 16 -- snap to tile grid so the image doesn't swim
+                part.CFrame = CFrame.new(math.floor(p.X / step + 0.5) * step, c.Y, math.floor(p.Z / step + 0.5) * step)
             end)
         end, ibpOff)
+
+    def("Visual", "bpimage", "Put an image on your baseplates (direct png/jpg link, or image ID)", "<link|id> [studsPerTile]", function(a)
+        if not a[1] then say("Give an image link or ID"); return end
+        say("Loading image...")
+        local img = resolveImage(a[1])
+        if not img then return end
+        bp.img = img
+        if a[2] then bp.tile = math.max(num(a[2], 16), 0) end
+        styleAll()
+        say("Baseplate image applied")
+    end, {"baseplateimage"})
+    def("Visual", "bptile", "Image size in studs per tile (0 = stretch one copy)", "<n>", function(a)
+        bp.tile = math.max(num(a[1], 16), 0)
+        styleAll()
+    end)
+    def("Visual", "bpcolor", "Baseplate color", "<r> <g> <b>", function(a)
+        bp.color = Color3.fromRGB(num(a[1], 70), num(a[2], 20), num(a[3], 26))
+        for _, p in ipairs(bp.fixed) do if p.Parent then p.Color = bp.color end end
+        if bp.inf and bp.inf.Parent then bp.inf.Color = bp.color end
+    end)
+    def("Visual", "bpclear", "Remove the baseplate image", nil, function() bp.img = nil; styleAll() end)
+    off(function() bp.img = nil end)
 
     -- No jump cooldown
     local njc
