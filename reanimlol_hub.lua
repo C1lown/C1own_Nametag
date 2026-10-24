@@ -2794,9 +2794,8 @@ local SCRIPT_BUTTONS = {
     {
         name = "ANTIVC",
         desc = "Doesnt allow you to be VC banned",
-        source = [[ loadstring(game:HttpGet("https://scriptblox.com/raw/Universal-Script-Anti-Vc-Ban-225666"))()
+        source = [[ loadstring(game:HttpGet("https://scriptblox.com/raw/Universal-Script-Anti-Vc-Ban-225666"))() ]],
             
-        ]],
     },
     {
         name = "example2",
