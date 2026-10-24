@@ -2790,18 +2790,12 @@ end
 
 local lastLine
 local runLine
-----------------------------------------------------------------------
--- SCRIPT BUTTONS: edit this table to add your own buttons.
--- Each one appears in Commands > Scripts and can also be run by typing its name.
--- Use `source` for Lua code as text, or `run` for a function.
--- Add `args = "<thing>"` and the button will fill the run bar so you can type arguments first.
-----------------------------------------------------------------------
 local SCRIPT_BUTTONS = {
     {
-        name = "myscript",
-        desc = "Replace this with what your script does",
-        source = [[
-            print("hello from my script button")
+        name = "ANTIVC",
+        desc = "Doesnt allow you to be VC banned",
+        source = [[ loadstring(game:HttpGet("https://scriptblox.com/raw/Universal-Script-Anti-Vc-Ban-225666"))() ]]
+            print("ANTIVC ON")
         ]],
     },
     {
