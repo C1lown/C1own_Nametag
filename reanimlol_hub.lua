@@ -29,6 +29,7 @@ local function hc(c) return shiftC(c, Theme.hue) end
 local function recolor(root, d)
     if d % 1 == 0 then return end
     for _, o in ipairs(root:GetDescendants()) do
+        if o:GetAttribute("nohue") then continue end
         if o:IsA("GuiObject") then o.BackgroundColor3 = shiftC(o.BackgroundColor3, d) end
         if o:IsA("TextLabel") or o:IsA("TextButton") or o:IsA("TextBox") then o.TextColor3 = shiftC(o.TextColor3, d) end
         if o:IsA("TextBox") then o.PlaceholderColor3 = shiftC(o.PlaceholderColor3, d) end
@@ -42,6 +43,128 @@ local function recolor(root, d)
         end
         local b = o:GetAttribute("base")
         if typeof(b) == "Color3" then o:SetAttribute("base", shiftC(b, d)) end
+    end
+end
+
+----------------------------------------------------------------------
+-- Cookie art: drawn cookies (dough, baked rim, chocolate chips) placed on the GUI panels
+----------------------------------------------------------------------
+local Cookie = {layers = {}, floaters = {}, halos = {}, on = true, image = ""} -- image: "rbxassetid://<id>" to use a real picture
+local function nh(o) o:SetAttribute("nohue", true); return o end -- theme hue shifts skip cookie parts
+local function cnew(class, props, parent)
+    local o = Instance.new(class)
+    if o:IsA("GuiObject") then o.BorderSizePixel = 0 end
+    for k, v in pairs(props) do o[k] = v end
+    o.Parent = parent
+    return nh(o)
+end
+local function cround(o, scale)
+    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(scale or .5, 0); c.Parent = o
+    return o
+end
+
+-- d = diameter px, alpha = 0 opaque .. 1 invisible, glow = warm halo ring
+function Cookie.make(parent, d, alpha, glow, rng)
+    rng = rng or Random.new()
+    local root = cnew("Frame", {Size = UDim2.fromOffset(d, d), BackgroundTransparency = 1}, parent)
+    if glow then
+        local halo = cround(cnew("Frame", {Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1}, root))
+        for _, spec in ipairs({{4, .55}, {9, .78}, {16, .92}}) do
+            local hs = cnew("UIStroke", {Color = Color3.fromRGB(255, 188, 84), Thickness = spec[1], Transparency = spec[2],
+                ApplyStrokeMode = Enum.ApplyStrokeMode.Border}, halo)
+            Cookie.halos[#Cookie.halos + 1] = {hs, spec[2]}
+        end
+    end
+    local cg = cnew("CanvasGroup", {Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, GroupTransparency = alpha or 0}, root)
+    if Cookie.image ~= "" then
+        cnew("ImageLabel", {Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Image = Cookie.image,
+            ScaleType = Enum.ScaleType.Fit}, cg)
+        return root
+    end
+    local function disc(scale, color, ox, oy)
+        return cround(cnew("Frame", {AnchorPoint = Vector2.new(.5, .5), Position = UDim2.fromScale(.5 + (ox or 0), .5 + (oy or 0)),
+            Size = UDim2.fromScale(scale, scale), BackgroundColor3 = color}, cg))
+    end
+    disc(1, Color3.fromRGB(168, 108, 52))               -- over-baked rim
+    disc(.9, Color3.fromRGB(207, 150, 82))              -- dough
+    disc(.7, Color3.fromRGB(224, 172, 104), -.02, -.03) -- puffed centre
+    disc(.34, Color3.fromRGB(236, 190, 124), -.08, -.1) -- highlight
+    for _ = 1, 3 do -- tiny surface cracks
+        local a, r = rng:NextNumber(0, math.pi * 2), rng:NextNumber(.12, .3)
+        cnew("Frame", {AnchorPoint = Vector2.new(.5, .5), Position = UDim2.fromScale(.5 + math.cos(a) * r, .5 + math.sin(a) * r),
+            Size = UDim2.fromScale(.16, .02), Rotation = rng:NextInteger(0, 179), BackgroundColor3 = Color3.fromRGB(176, 118, 58),
+            BackgroundTransparency = .35}, cg)
+    end
+    local chips = {}
+    for _ = 1, rng:NextInteger(6, 9) do -- chocolate chips, kept from piling up
+        for _try = 1, 8 do
+            local a = rng:NextNumber(0, math.pi * 2)
+            local r = math.sqrt(rng:NextNumber()) * .34
+            local x, y = math.cos(a) * r, math.sin(a) * r
+            local ok = true
+            for _, c in ipairs(chips) do if (c[1] - x) ^ 2 + (c[2] - y) ^ 2 < .016 then ok = false; break end end
+            if ok then
+                chips[#chips + 1] = {x, y}
+                local sz = rng:NextNumber(.12, .19)
+                local chip = cround(cnew("Frame", {AnchorPoint = Vector2.new(.5, .5), Position = UDim2.fromScale(.5 + x, .5 + y),
+                    Size = UDim2.fromScale(sz, sz * rng:NextNumber(.7, .95)), Rotation = rng:NextInteger(0, 179),
+                    BackgroundColor3 = Color3.fromRGB(70, 38, 20)}, cg), .38)
+                cnew("Frame", {Position = UDim2.fromScale(.14, .12), Size = UDim2.fromScale(.38, .24),
+                    BackgroundColor3 = Color3.fromRGB(112, 66, 36)}, chip)
+                break
+            end
+        end
+    end
+    return root
+end
+
+-- A faint field of slowly drifting cookies inside a panel (clipped to its rounded corners).
+-- w, h = the panel's size in pixels. Sits behind everything else in the panel.
+function Cookie.layer(frame, radius, w, h, count, minD, maxD, alpha)
+    local rng = Random.new()
+    local cg = cnew("CanvasGroup", {Name = "CookieLayer", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+        GroupTransparency = alpha, ZIndex = 0, Active = false, Visible = Cookie.on}, frame)
+    local gc = Instance.new("UICorner"); gc.CornerRadius = UDim.new(0, radius); gc.Parent = cg
+    Cookie.layers[#Cookie.layers + 1] = cg
+    for _ = 1, count do
+        local d = rng:NextInteger(minD, maxD)
+        local k = Cookie.make(cg, d, 0, false, rng)
+        k.AnchorPoint = Vector2.new(.5, .5)
+        k.Rotation = rng:NextInteger(0, 359)
+        local f = {f = k, x = rng:NextNumber(0, w), y = rng:NextNumber(0, h), w = w, d = d,
+            vx = rng:NextNumber(3, 9) * (rng:NextInteger(0, 1) == 0 and -1 or 1), spin = rng:NextNumber(-8, 8)}
+        k.Position = UDim2.fromOffset(f.x, f.y)
+        Cookie.floaters[#Cookie.floaters + 1] = f
+    end
+    if not Cookie.conn then
+        Cookie.conn = game:GetService("RunService").Heartbeat:Connect(function(dt)
+            local list, alive = Cookie.floaters, 0
+            for i = #list, 1, -1 do
+                local f = list[i]
+                if not f.f.Parent then
+                    table.remove(list, i)
+                else
+                    alive += 1
+                    f.x += f.vx * dt
+                    if f.x > f.w + f.d then f.x = -f.d elseif f.x < -f.d then f.x = f.w + f.d end
+                    f.f.Position = UDim2.fromOffset(f.x, f.y)
+                    f.f.Rotation = f.f.Rotation + f.spin * dt
+                end
+            end
+            for i = #Cookie.halos, 1, -1 do
+                local e = Cookie.halos[i]
+                if e[1].Parent then e[1].Transparency = math.clamp(e[2] - 0.14 * (0.5 + 0.5 * math.sin(os.clock() * 2.2)), 0, 1)
+                else table.remove(Cookie.halos, i) end
+            end
+            if alive == 0 and #Cookie.halos == 0 then Cookie.conn:Disconnect(); Cookie.conn = nil end
+        end)
+    end
+    return cg
+end
+function Cookie.setVisible(v)
+    for i = #Cookie.layers, 1, -1 do
+        local l = Cookie.layers[i]
+        if l.Parent then l.Visible = v else table.remove(Cookie.layers, i) end
     end
 end
 
@@ -906,6 +1029,7 @@ local PANEL_ALPHA = 0.22
 local panel = T("Frame", {Size = UDim2.fromOffset(PANEL_W, PANEL_H), Position = UDim2.new(0.5, -PANEL_W / 2, 0.5, -PANEL_H / 2),
     BackgroundColor3 = Color3.new(1, 1, 1), Active = true}, gui)
 corner(panel, 14)
+Cookie.layer(panel, 14, PANEL_W, PANEL_H, 18, 40, 90, .82)
 do
     local stroke = Instance.new("UIStroke")
     stroke.Color, stroke.Thickness, stroke.Transparency, stroke.ApplyStrokeMode = C.stroke, 1, .45, Enum.ApplyStrokeMode.Border
@@ -4013,8 +4137,17 @@ local function corner(o, r) local c = Instance.new("UICorner"); c.CornerRadius =
 
 -- glass body: diagonal crimson gradient + an animated, slowly rotating glowing rim
 local strokeGrads = {}
+local glowStrokes = {} -- {stroke, baseTransparency}: soft warm halo that pulses
 local function glass(frame, radius)
     corner(frame, radius or 16)
+    do -- cookies drifting inside the panel
+        local w, h = frame.Size.X.Offset, frame.Size.Y.Offset
+        if h < 80 then
+            Cookie.layer(frame, radius or 16, w, h, 7, 24, 36, .55)
+        else
+            Cookie.layer(frame, radius or 16, w, h, math.clamp(math.floor(w * h / 11000), 8, 22), 40, 92, .8)
+        end
+    end
     local g = Instance.new("UIGradient")
     g.Rotation = 115
     g.Color = ColorSequence.new({
@@ -4035,10 +4168,20 @@ local function glass(frame, radius)
     sg.Parent = st
     st.Parent = frame
     strokeGrads[#strokeGrads + 1] = sg
+    for _, spec in ipairs({{5, .72}, {11, .86}, {19, .94}}) do -- layered strokes fake a blurred cookie-gold glow
+        local gs = Instance.new("UIStroke")
+        gs.Color, gs.Thickness, gs.Transparency, gs.ApplyStrokeMode = C.accent2, spec[1], spec[2], Enum.ApplyStrokeMode.Border
+        gs.Parent = frame
+        glowStrokes[#glowStrokes + 1] = {gs, spec[2]}
+    end
 end
 bind(RunService.RenderStepped, function(dt)
     for _, g in ipairs(strokeGrads) do
         if g.Parent then g.Rotation = (g.Rotation + dt * 45) % 360 end
+    end
+    local pulse = 0.5 + 0.5 * math.sin(os.clock() * 2.2)
+    for _, e in ipairs(glowStrokes) do
+        if e[1].Parent then e[1].Transparency = math.clamp(e[2] - 0.1 * pulse + 0.05, 0, 1) end
     end
 end)
 local function accentLine(parent, x, y, w)
@@ -4091,6 +4234,24 @@ local gui = Instance.new("ScreenGui")
 gui.Name, gui.ResetOnSpawn, gui.ZIndexBehavior = "CookieHub", false, Enum.ZIndexBehavior.Sibling
 gui.Parent = lp:WaitForChild("PlayerGui")
 
+gui.DisplayOrder = 10
+def("Visual", "cookies", "Show/hide the cookies on the GUI (on/off, no arg toggles)", "[on|off]", function(a)
+    local v = tostring(a[1] or ""):lower()
+    if v == "on" then Cookie.on = true elseif v == "off" then Cookie.on = false else Cookie.on = not Cookie.on end
+    Cookie.setVisible(Cookie.on)
+    say("GUI cookies " .. (Cookie.on and "on" or "off"))
+end, {"cookiebg"})
+def("Visual", "cookieglow", "Turn the warm cookie glow on/off", "[on|off]", function(a)
+    local v = tostring(a[1] or ""):lower()
+    local cur = glowStrokes[1] and glowStrokes[1][1].Enabled
+    local want
+    if v == "on" then want = true elseif v == "off" then want = false else want = not cur end
+    for _, e in ipairs(glowStrokes) do e[1].Enabled = want end
+    for _, e in ipairs(Cookie.halos) do e[1].Enabled = want end
+    say("Cookie glow " .. (want and "on" or "off"))
+end)
+off(function() Cookie.setVisible(true); Cookie.on = true end)
+
 -- toast notifications (replace the plain status text)
 local toastF = mk("Frame", {Size = UDim2.fromOffset(360, 40), AnchorPoint = Vector2.new(.5, 1), Position = UDim2.new(.5, 0, 1, -20),
     BackgroundColor3 = hc(Color3.fromRGB(34, 6, 12)), BackgroundTransparency = 1, Visible = false, ZIndex = 50}, gui)
@@ -4121,7 +4282,8 @@ do
     lg.Color = ColorSequence.new(C.accent2, hc(Color3.fromRGB(190, 20, 44)))
     lg.Parent = logo
 end
-mk("TextLabel", {Text = "ck", Font = Enum.Font.GothamBlack, TextSize = 15, Size = UDim2.fromScale(1, 1)}, logo)
+logo.BackgroundTransparency = 1
+Cookie.make(logo, 36, 0, true, Random.new(7))
 mk("TextLabel", {Text = "cookie", Font = Enum.Font.GothamBold, TextSize = 15, Position = UDim2.fromOffset(54, 8),
     Size = UDim2.fromOffset(60, 18), TextXAlignment = Enum.TextXAlignment.Left}, bar)
 mk("TextLabel", {Text = "hub", Font = Enum.Font.GothamMedium, TextSize = 11, TextColor3 = C.dim, Position = UDim2.fromOffset(54, 26),
