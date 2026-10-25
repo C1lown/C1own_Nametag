@@ -1745,7 +1745,8 @@ local function assignState(s, e)
     setStatus(cap(s) .. " = " .. e.name)
 end
 local openStatePicker -- defined in the States section (shares the popup helpers)
-local stateBtn = button(tabE, "Choose state to assign  ▼", 0, 284, 356, 28, function()
+local stateBtn
+stateBtn = button(tabE, "Choose state to assign  ▼", 0, 284, 356, 28, function()
     openStatePicker(stateBtn)
 end)
 
