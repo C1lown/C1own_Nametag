@@ -261,14 +261,21 @@ local function startReanimation()
         and copyHumanoid.Parent == copy and copyRoot.Parent == copy and root.Parent == character
     end
     local function follow()
+      -- hide mode: the real ragdolled body is parked under the map while you keep controlling the clone above
+      local off = Vector3.zero
+      if s.hideReq then
+        local d = math.min(s.hideReq, copyRoot.Position.Y - (Workspace.FallenPartsDestroyHeight + 30)) -- stay above the void kill height
+        if d >= 10 then off = Vector3.new(0, -d, 0) end
+      end
       for _, link in ipairs(s.links) do
         if link.part.Parent and link.base.Parent then
-          link.part.CFrame = link.base.CFrame
+          link.part.CFrame = link.base.CFrame + off
           link.part.AssemblyLinearVelocity = Vector3.zero
           link.part.AssemblyAngularVelocity = Vector3.zero
         end
       end
     end
+    s.follow = follow
     local function listen(name, signal, callback)
       s.conns[name] = signal:Connect(function(...)
         if S.session ~= s then return end
@@ -320,6 +327,20 @@ end
 
 return {
  Start = startReanimation, Stop = stopReanimation,
+ Realign = function()
+   local s = S.session
+   if not s or not s.follow then return false end
+   for _, link in ipairs(s.links) do
+     if link.part.Parent then
+       link.part.AssemblyLinearVelocity = Vector3.zero
+       link.part.AssemblyAngularVelocity = Vector3.zero
+     end
+   end
+   pcall(s.follow)
+   pcall(function() if s.humanoid.Health < s.humanoid.MaxHealth then s.humanoid.Health = s.humanoid.MaxHealth end end)
+   return true
+ end,
+ SetHide = function(depth) local s = S.session; if not s then return false end s.hideReq = depth; return true end,
  Get = function() local s = S.session; return s and s.copy.Parent and s.copy or nil end,
  OnStopped = function(callback) S.callback = callback end,
 }
@@ -961,7 +982,7 @@ end)
 ----------------------------------------------------------------------
 -- Engine: state animations, emotes, blending, recording
 ----------------------------------------------------------------------
-local engine = {motors = {}, stateAnims = {}, gen = {}, token = 0, fadeT = 1, snapshot = {}, baked = {}, parts = {}, collide = {}}
+local engine = {motors = {}, stateAnims = {}, gen = {}, token = 0, fadeT = 1, snapshot = {}, baked = {}, fitted = {}, parts = {}, collide = {}}
 local rec = {on = false, clip = nil, t = 0, acc = 0, frames = 0}
 local updateRecUI
 -- transport state (Play tab), live limb control (Live tab) and tricks (Tricks tab); logic is filled in further down
@@ -984,7 +1005,67 @@ local function usable(anim)
     return false
 end
 
-local function resolveAnim(entry)
+-- Fit a clip to YOUR avatar: converts clips made for the other rig type (R6 <-> R15, part by part, with the
+-- joint-axis difference handled) and scales any joint translation (root bob, stretch, reach) to your body height.
+-- Recordings made on your own avatar (own = true) are left alone. Toggle with the hub command "fitclips".
+local fitClip
+do
+    local TO_R6 = {Torso = "LowerTorso", Head = "Head", ["Left Arm"] = "LeftUpperArm", ["Right Arm"] = "RightUpperArm",
+        ["Left Leg"] = "LeftUpperLeg", ["Right Leg"] = "RightUpperLeg"} -- R6 part <- R15 source part
+    local TO_R15 = {LowerTorso = "Torso", Head = "Head", LeftUpperArm = "Left Arm", RightUpperArm = "Right Arm",
+        LeftUpperLeg = "Left Leg", RightUpperLeg = "Right Leg"} -- R15 part <- R6 source part
+    local R6_ARM_R = CFrame.new(0, 0, 0, 0, 0, 1, 0, 1, 0, -1, 0, 0)
+    local R6_ARM_L = CFrame.new(0, 0, 0, 0, 0, -1, 0, 1, 0, 1, 0, 0)
+    local R6_UP = CFrame.new(0, 0, 0, -1, 0, 0, 0, 0, 1, 0, 1, 0)
+    local R6_C0_ROT = {Torso = R6_UP, Head = R6_UP, ["Right Arm"] = R6_ARM_R, ["Left Arm"] = R6_ARM_L,
+        ["Right Leg"] = R6_ARM_R, ["Left Leg"] = R6_ARM_L} -- default R6 joint C0 rotations (R15 joints have none)
+    local function engineScale()
+        local h, r = engine.hum, engine.root
+        if not (h and r) then return 1 end
+        local height = engine.rig == "R6" and 3 * (r.Size.Y / 2) or (h.HipHeight + r.Size.Y / 2)
+        return math.clamp(height / 3, 0.25, 6) -- 3 studs = the default avatar
+    end
+    fitClip = function(clip)
+        if not clip or clip.own or type(clip.curves) ~= "table" or shared.ReanimlolFit == false then return clip end
+        local cached = engine.fitted[clip]
+        if cached then return cached end
+        local rig, scale = engine.rig, engineScale()
+        local srcRig = clip.rig or rig
+        local out = clip
+        if srcRig ~= rig or math.abs(scale - 1) > 0.02 then
+            out = {curves = {}, duration = clip.duration, looped = clip.looped, hold = clip.hold, rig = rig, own = true}
+            local map = nil
+            if srcRig ~= rig then map = (rig == "R6") and TO_R6 or TO_R15 end
+            for partName, motor in pairs(engine.motors) do
+                local srcName = map and map[partName] or partName
+                local curve = clip.curves[srcName]
+                if not curve and map and partName == "Torso" then curve = clip.curves.UpperTorso end
+                if curve then
+                    local rt = motor.C0.Rotation
+                    local rs = (srcRig == "R6" and R6_C0_ROT[srcName]) or CFrame.identity
+                    local nc = {}
+                    for i, k in ipairs(curve) do
+                        local pos, rot = k.value.Position, k.value.Rotation
+                        local newRot, newPos
+                        if srcRig == rig then
+                            newRot, newPos = rot, pos * scale
+                        else
+                            newRot = rt:Inverse() * (rs * rot * rs:Inverse()) * rt
+                            newPos = rt:Inverse():VectorToWorldSpace(rs:VectorToWorldSpace(pos)) * scale
+                        end
+                        nc[i] = {time = k.time, value = CFrame.new(newPos) * newRot, style = k.style, direction = k.direction}
+                    end
+                    out.curves[partName] = nc
+                end
+            end
+        else
+            out = clip
+        end
+        engine.fitted[clip] = out
+        return out
+    end
+end
+local function resolveRaw(entry)
     if not entry then return nil end
     if entry.clip then return entry.clip end
     if entry.rec then
@@ -1003,6 +1084,7 @@ local function resolveAnim(entry)
     end
     return baked
 end
+local function resolveAnim(entry) return fitClip(resolveRaw(entry)) end
 
 local function refreshState(s)
     if not engine.copy then return end
@@ -1133,6 +1215,7 @@ local function engineStart()
     engine.rig = engine.hum.RigType == Enum.HumanoidRigType.R6 and "R6" or "R15"
     engine.motors = {}
     engine.baked = {}
+    engine.fitted = {}
     for _, m in ipairs(copy:GetDescendants()) do
         if m:IsA("Motor6D") and m.Part1 then engine.motors[m.Part1.Name] = m end
     end
@@ -1235,7 +1318,7 @@ playEntry = function(entry)
 end
 
 -- Recording helpers ----------------------------------------------------
-local function newClip() return {curves = {}, duration = 0, looped = true, rig = engine.rig} end
+local function newClip() return {curves = {}, duration = 0, looped = true, rig = engine.rig, own = true} end
 
 local function serializeClip(clip, name)
     local out = {name = name, rig = clip.rig, duration = clip.duration, curves = {}}
@@ -1268,7 +1351,8 @@ do -- load saved recordings
                     if ok and type(tbl) == "table" and type(tbl.curves) == "table" then
                         local name = tbl.name or tostring(path)
                         recorded[#recorded + 1] = {key = "r:" .. name, name = name, cat = "Recorded", sub = "Local",
-                            recorded = true, clip = deserializeClip(tbl), path = path}
+                            recorded = true, path = path,
+                            clip = (function() local c = deserializeClip(tbl); c.own = true; return c end)()}
                     end
                 end
             end
@@ -2683,6 +2767,7 @@ cleanup = function()
     for _, c in ipairs(connections) do pcall(function() c:Disconnect() end) end
     if shared.ReanimlolCleanup == cleanup then shared.ReanimlolCleanup = nil end
     shared.ReanimlolTheme = nil
+    shared.ReanimlolTurnOn, shared.ReanimlolHide, shared.ReanimlolRefit, shared.ReanimlolRealign = nil, nil, nil, nil
     gui:Destroy()
 end
 shared.ReanimlolCleanup = cleanup
@@ -2691,6 +2776,14 @@ refreshChips()
 rebuildList()
 refreshStateRows()
 updateRecUI()
+shared.ReanimlolTurnOn = function(cb) turnOn(cb) end
+shared.ReanimlolHide = function(depth) return bodyReanim.SetHide(depth) end
+shared.ReanimlolRealign = function() return bodyReanim.Realign() end
+shared.ReanimlolRefit = function()
+    if not engine.copy then return end
+    engine.fitted = {}
+    for _, st in ipairs(STATES) do refreshState(st) end
+end
 shared.ReanimlolTheme = function(d)
     if destroyed then return end
     for k, v in pairs(C) do C[k] = shiftC(v, d) end
@@ -2769,6 +2862,22 @@ local function mouseHit()
     rayParams.FilterDescendantsInstances = {lp.Character}
     local hit = workspace:Raycast(r.Origin, r.Direction * 1000, rayParams)
     return hit and hit.Position
+end
+-- shared by invis, ftp and tptool: while invisible, teleporting moves the hidden body sideways under the map
+-- (same depth below the spot you pick) instead of popping it up into view
+local invisState = {}
+local function teleportTo(pos)
+    local r = root()
+    if not (r and pos) then return end
+    local I = invisState
+    if I.on and I.depth then
+        local y = math.max(pos.Y - I.depth, workspace.FallenPartsDestroyHeight + 30)
+        I.y, I.camY = y, pos.Y + 3
+        r.CFrame = CFrame.new(pos.X, y, pos.Z) * (r.CFrame - r.CFrame.Position)
+        r.AssemblyLinearVelocity = Vector3.new()
+    else
+        r.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0))
+    end
 end
 
 ----------------------------------------------------------------------
@@ -3226,8 +3335,7 @@ do
             ftp.conn = UIS.InputBegan:Connect(function(i, processed)
                 if processed or typing() then return end
                 if i.KeyCode == Enum.KeyCode.F then
-                    local pos, r = mouseHit(), root()
-                    if pos and r then r.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0)) end
+                    teleportTo(mouseHit())
                 end
             end)
         end,
@@ -3239,10 +3347,7 @@ do
             if tool then tool:Destroy() end
             tool = Instance.new("Tool")
             tool.Name, tool.RequiresHandle, tool.CanBeDropped = "Teleport Tool", false, false
-            tool.Activated:Connect(function()
-                local pos, r = mouseHit(), root()
-                if pos and r then r.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0)) end
-            end)
+            tool.Activated:Connect(function() teleportTo(mouseHit()) end)
             tool.Parent = lp:FindFirstChildOfClass("Backpack")
         end,
         function() if tool then tool:Destroy(); tool = nil end end)
@@ -4491,6 +4596,113 @@ do
             end)
         end, rwOff)
 
+    -- Invis: park yourself under the map. Others can't see you, but you stay alive and can still chat.
+    local inv = invisState
+    local function invOff(silent)
+        stopLoop("invis")
+        if inv.part then inv.part:Destroy(); inv.part = nil end
+        local cam = workspace.CurrentCamera
+        if inv.cam then
+            if cam and cam.CameraSubject == inv.cam then
+                local hh = hum()
+                if hh then cam.CameraSubject = hh end
+            end
+            inv.cam:Destroy(); inv.cam = nil
+        end
+        local r = root()
+        if inv.on and not silent and r and inv.back and inv.char == lp.Character then
+            r.CFrame = inv.back
+            r.AssemblyLinearVelocity = Vector3.new()
+        end
+        inv.on, inv.back, inv.char, inv.y, inv.depth = false, nil, nil, nil, nil
+    end
+    pair("Movement", "invis", "uninvis", "Hide under the map (you can still chat)", "Come back up to where you were", "[depth]",
+        function(a)
+            invOff(true)
+            local r, h = root(), hum()
+            if not (r and h) then say("Character not ready"); return end
+            local pos = r.Position
+            local depth = math.clamp(num(a[1], 60), 10, 5000)
+            local y = pos.Y - depth
+            local void = workspace.FallenPartsDestroyHeight
+            if y < void + 30 then y = void + 30 end -- stay clear of the height where the game deletes you
+            if y > pos.Y - 15 then say("The map is too low to hide under"); return end
+            inv.on, inv.back, inv.char, inv.y, inv.depth = true, r.CFrame, lp.Character, y, depth
+            local p = Instance.new("Part")
+            p.Name, p.Anchored, p.Size, p.Transparency = "C1InvisPad", true, Vector3.new(40, 2, 40), 1
+            p.CanTouch, p.CanQuery, p.CastShadow = false, false, false
+            p.Parent = workspace
+            inv.part = p
+            -- camera anchor: an invisible part at your old height that follows you sideways, so the camera
+            -- stays above the ground instead of following you underneath it
+            local cp = Instance.new("Part")
+            cp.Name, cp.Anchored, cp.Size, cp.Transparency = "C1InvisCam", true, Vector3.new(1, 1, 1), 1
+            cp.CanCollide, cp.CanTouch, cp.CanQuery, cp.CastShadow = false, false, false, false
+            cp.CFrame = CFrame.new(pos)
+            cp.Parent = workspace
+            inv.cam, inv.camY = cp, pos.Y
+            local function stand(rr, hh)
+                return CFrame.new(rr.Position.X, inv.y - (hh.HipHeight + rr.Size.Y / 2) - 1, rr.Position.Z)
+            end
+            r.CFrame = CFrame.new(pos.X, y, pos.Z) * (r.CFrame - r.CFrame.Position)
+            r.AssemblyLinearVelocity = Vector3.new()
+            p.CFrame = stand(r, h)
+            do
+                local cam = workspace.CurrentCamera
+                if cam then cam.CameraSubject = cp end
+            end
+            startLoop("invis", 0, function()
+                local rr, hh = root(), hum()
+                if not (rr and hh and p.Parent) or inv.char ~= lp.Character or hh.Health <= 0 then
+                    invOff(true) -- died / respawned: nothing to return to
+                    return
+                end
+                if rr.Position.Y < inv.y - 12 then -- slipped off the pad
+                    rr.CFrame = CFrame.new(rr.Position.X, inv.y, rr.Position.Z)
+                    rr.AssemblyLinearVelocity = Vector3.new()
+                end
+                p.CFrame = stand(rr, hh)
+                local cam = workspace.CurrentCamera
+                if inv.cam and inv.cam.Parent then
+                    inv.cam.CFrame = CFrame.new(rr.Position.X, inv.camY, rr.Position.Z)
+                    if cam and cam.CameraSubject ~= inv.cam then cam.CameraSubject = inv.cam end
+                end
+            end)
+            say("Invisible under the map: " .. tostring(math.floor(pos.Y - y)) .. " studs down. uninvis to return")
+        end, function() invOff(false) end, {"hideunder", "vanish"}, {"uninvisible", "unvanish"})
+
+    -- Ragdoll hide: your real (ragdolled, replicated) body goes under the map; you keep walking around as the
+    -- invisible clone above. Others can't see you but your chat still works.
+    pair("Movement", "ragdollhide", "unragdollhide", "Put your ragdoll under the map while you keep moving above (starts reanim)",
+        "Bring your ragdoll back up", "[depth]",
+        function(a)
+            local depth = math.clamp(num(a[1], 60), 10, 5000)
+            if type(G.ReanimlolCleanup) ~= "function" then
+                local ok, err = pcall(ReanimlolModule)
+                if not ok then warn("c1lown hub: reanim failed: " .. tostring(err)); say("Reanim failed to load"); return end
+            end
+            if type(G.ReanimlolTurnOn) ~= "function" then say("Reanim not ready"); return end
+            G.ReanimlolTurnOn(function()
+                if G.ReanimlolHide and G.ReanimlolHide(depth) then
+                    say("Ragdoll hidden " .. tostring(depth) .. " studs down. unragdollhide to bring it back")
+                else
+                    say("Reanim isn't running")
+                end
+            end)
+        end,
+        function()
+            if type(G.ReanimlolHide) == "function" then pcall(G.ReanimlolHide, nil) end
+        end, {"hideragdoll", "rghide"}, {"unhideragdoll", "unrghide"})
+
+    def("Character", "fitclips", "Fit emotes and imported animations to your avatar's rig and size (on/off, no arg toggles)", "[on|off]", function(a)
+        local v = tostring(a[1] or ""):lower()
+        local cur = G.ReanimlolFit ~= false
+        if v == "on" then cur = true elseif v == "off" then cur = false else cur = not cur end
+        G.ReanimlolFit = cur
+        if type(G.ReanimlolRefit) == "function" then pcall(G.ReanimlolRefit) end
+        say("Fit clips to my avatar: " .. (cur and "on" or "off"))
+    end, {"fitanims"})
+
     -- Friends
     def("Utility", "friend", "Send friend request", "<player>", function(a)
         local p = findPlayer(a[1])
@@ -4535,8 +4747,8 @@ do
         if not (pr and r) then say("Player not found"); return end
         r.CFrame = pr.CFrame * CFrame.new(0, 0, 3)
     end)
-
-    local ac = {tracks = {}, cache = {char = nil, list = {}}}
+    local ac = {tracks = {}, cache = {char = nil, list = {}}, badT = 0, stretch = true, jc = {}}
+    local SKIP_ID = "507768375" -- same default animation Novoline's copyemote skips
     local function acMotors()
         local mc = lp.Character
         if ac.cache.char ~= mc then
@@ -4549,34 +4761,112 @@ do
         end
         return ac.cache.list
     end
-    -- Pose copy. Joint math: Part1 = Part0 * C0 * Transform * C1^-1, so Transform = (Part0 * C0)^-1 * Part1 * C1.
-    -- It only reads the target's part positions, so it works however they pose their body.
-    local function applyPose(dt)
+    -- Pose copy, fitted to YOUR avatar. Only joint rotations are copied (so limbs never stretch or detach on a
+    -- different body size), the root joint's translation is scaled by body height, and R6 <-> R15 targets are
+    -- mapped part by part (R6 arm = R15 upper arm, torso = upper/lower torso, ...). Joints with no counterpart relax.
+    local R15_TO_R6 = {UpperTorso = "Torso", LowerTorso = "Torso", LeftUpperArm = "Left Arm", RightUpperArm = "Right Arm",
+        LeftUpperLeg = "Left Leg", RightUpperLeg = "Right Leg"}
+    local R6_TO_R15 = {["Left Arm"] = "LeftUpperArm", ["Right Arm"] = "RightUpperArm", ["Left Leg"] = "LeftUpperLeg",
+        ["Right Leg"] = "RightUpperLeg"}
+    local function bodyHeight(model)
+        local h = model and model:FindFirstChildOfClass("Humanoid")
+        local r = model and model:FindFirstChild("HumanoidRootPart")
+        if not (h and r) then return 5 end
+        if h.RigType == Enum.HumanoidRigType.R6 then return 3 * (r.Size.Y / 2) + 0.01 end -- legs 2 + half torso 1, scaled by root
+        return math.max(h.HipHeight + r.Size.Y / 2, 0.5)
+    end
+    -- the target's part that matches one of my parts; `other` is the part on the far side of the joint
+    local function matchPart(tc, name, other)
+        local direct = tc:FindFirstChild(name)
+        if direct and direct:IsA("BasePart") then return direct end
+        local alias
+        if name == "Torso" then -- my R6 torso <- their R15 upper/lower torso
+            local low = other == "HumanoidRootPart" or (other and other:find("Leg", 1, true) ~= nil)
+            alias = low and "LowerTorso" or "UpperTorso"
+        else
+            alias = R15_TO_R6[name] or R6_TO_R15[name]
+        end
+        local p = alias and tc:FindFirstChild(alias)
+        return p and p:IsA("BasePart") and p or nil
+    end
+    -- the target's real joint data (C0, C1) for the joint between t0 (parent) and t1 (child).
+    -- Uses their Motor6D if it exists; a reanimating target has none, so fall back to the rig attachments.
+    local function targetJoint(tc, motor, t0, t1)
+        for _, m in ipairs(tc:GetDescendants()) do
+            if m:IsA("Motor6D") and m.Part0 == t0 and m.Part1 == t1 then return m.C0, m.C1 end
+        end
+        local an = motor.Name .. "RigAttachment"
+        local a0, a1 = t0:FindFirstChild(an), t1:FindFirstChild(an)
+        if a0 and a1 and a0:IsA("Attachment") and a1:IsA("Attachment") then return a0.CFrame, a1.CFrame end
+    end
+    local function applyPose(dt, full)
         local tc = ac.target and ac.target.Character
-        if not (tc and lp.Character) then return 0 end
-        local k = 1 - math.exp(-(dt or 1 / 60) * 35)
+        local mc = lp.Character
+        if not (tc and mc) then return 0 end
+        if ac.jc.char ~= tc then ac.jc = {char = tc, map = weak()} end
+        local k = full and 1 or (1 - math.exp(-(dt or 1 / 60) * 35))
+        local scale = bodyHeight(mc) / bodyHeight(tc)
+        local mh0, th0 = mc:FindFirstChildOfClass("Humanoid"), tc:FindFirstChildOfClass("Humanoid")
+        local sameRig = mh0 and th0 and mh0.RigType == th0.RigType
         local n = 0
         for _, m in ipairs(acMotors()) do
             local p0, p1 = m.Part0, m.Part1
             if p0 and p1 and m.Parent then
-                local t0, t1 = tc:FindFirstChild(p0.Name), tc:FindFirstChild(p1.Name)
-                if t0 and t1 and t0:IsA("BasePart") and t1:IsA("BasePart") then
-                    local want = (t0.CFrame * m.C0):Inverse() * t1.CFrame * m.C1
-                    m.Transform = m.Transform:Lerp(want, k)
-                    n += 1
+                local t0, t1 = matchPart(tc, p0.Name, p1.Name), matchPart(tc, p1.Name, p0.Name)
+                local want = CFrame.identity
+                if t0 and t1 and t0 ~= t1 then
+                    local isRoot = p0.Name == "HumanoidRootPart"
+                    local tC0, tC1
+                    if sameRig then
+                        local cached = ac.jc.map[m]
+                        if cached == nil then
+                            local a, b = targetJoint(tc, m, t0, t1)
+                            cached = a and {a, b} or false
+                            ac.jc.map[m] = cached
+                        end
+                        if cached then tC0, tC1 = cached[1], cached[2] end
+                    end
+                    if tC0 then
+                        -- exact transform of THEIR joint, so it can't be skewed by body proportions
+                        local tr = (t0.CFrame * tC0):Inverse() * (t1.CFrame * tC1)
+                        want = tr.Rotation
+                        local pos = tr.Position
+                        if isRoot or (ac.stretch and pos.Magnitude > 0.15) then
+                            pos = pos * scale
+                            if pos.Magnitude > 150 then pos = pos.Unit * 150 end
+                            want = CFrame.new(pos) * want
+                        end
+                    else
+                        -- different rig types: map part by part, rotation only (plus root crouch/lift)
+                        local rel = (t0.CFrame * m.C0.Rotation):Inverse() * (t1.CFrame * m.C1.Rotation)
+                        want = rel.Rotation
+                        if isRoot then
+                            local pos = ((t0.CFrame * m.C0):Inverse() * t1.CFrame * m.C1).Position * scale
+                            if pos.Magnitude > 150 then pos = pos.Unit * 150 end
+                            want = CFrame.new(pos) * want
+                        end
+                    end
                 end
+                m.Transform = k >= 1 and want or m.Transform:Lerp(want, k)
+                n += 1
             end
         end
         return n
+    end
+    local function stopCopies()
+        for t, tr in pairs(ac.tracks) do
+            if tr then pcall(function() tr:Stop(0.1); tr:Destroy() end) end
+            ac.tracks[t] = nil
+        end
     end
     local function acOff()
         for _, key in ipairs({"conn", "render"}) do
             if ac[key] then ac[key]:Disconnect(); ac[key] = nil end
         end
         if ac.hook and G.ReanimlolOverride == ac.hook then G.ReanimlolOverride = nil end
-        ac.hook, ac.target, ac.motor, ac.force = nil, nil, false, false
-        for _, t in pairs(ac.tracks) do pcall(function() t:Stop(0.1) end) end
-        ac.tracks = {}
+        ac.hook, ac.target, ac.motor, ac.force, ac.reanim, ac.tReanim = nil, nil, false, false, false, nil
+        stopCopies()
+        ac.badT = 0
         if ac.usedMotor then
             for _, m in ipairs(ac.cache.list) do
                 if m.Parent then pcall(function() m.Transform = CFrame.identity end) end
@@ -4587,73 +4877,148 @@ do
         local c = lp.Character
         local an = c and c:FindFirstChild("Animate")
         if an and ac.hadAnimate then an.Disabled = false end
-        ac.hadAnimate = false
+        ac.hadAnimate, ac.char = false, nil
+        ac.jc = {}
+        if type(G.ReanimlolRealign) == "function" then pcall(G.ReanimlolRealign) end -- snap ragdoll back onto the clone
     end
-    pair("Character", "animcopy", "unanimcopy", "Copy a player's animations or keyframe pose", "Stop copying animations", "<player> [motor]",
+    -- Works like Novoline's copyemote: every animation the target is playing is loaded on your own animator,
+    -- started at the same time position and speed, and stopped when the target's track stops. It keeps watching,
+    -- so animations the target starts later are copied too.
+    pair("Character", "animcopy", "unanimcopy", "Copy a player's playing animations (Novoline-style sync)", "Stop copying animations", "<player> [motor]",
         function(a)
             acOff()
             local p = findPlayer(a[1])
             if not p or p == lp then say("Player not found"); return end
             ac.target = p
             ac.force = tostring(a[2] or ""):lower() == "motor"
-            local c = lp.Character
-            local an = c and c:FindFirstChild("Animate")
-            if an and not an.Disabled then an.Disabled = true; ac.hadAnimate = true end
-            local myH = hum()
-            local myAn = myH and myH:FindFirstChildOfClass("Animator")
-            if myAn then for _, t in ipairs(myAn:GetPlayingAnimationTracks()) do t:Stop(0) end end
-            -- while reanimated, the reanim engine calls this every step so the pose reaches your real (replicated) body
-            ac.hook = function(dt) if ac.motor then applyPose(dt) end end
+            ac.badT = 0
+            -- while reanimated the engine resets joints every step, so pose-copy is applied at the end of each step
+            ac.hook = function(dt) if ac.motor then applyPose(dt, true) end end
             G.ReanimlolOverride = ac.hook
-            ac.render = RunService.RenderStepped:Connect(function(dt) if ac.motor then applyPose(dt) end end)
+            ac.render = RunService.RenderStepped:Connect(function(dt)
+                if ac.motor and not ac.reanim then applyPose(dt, false) end
+            end)
             ac.conn = RunService.Heartbeat:Connect(function(dt)
-                local tc = p.Character
+                local tp = ac.target
+                if not tp or not tp.Parent then acOff(); say("Copy target left"); return end
+                local mc = lp.Character
+                if not mc then return end
+                if ac.char ~= mc then stopCopies(); ac.char, ac.badT = mc, 0 end
+                local an0 = mc:FindFirstChild("Animate")
+                if an0 and an0:IsA("LocalScript") and not an0.Disabled then an0.Disabled = true; ac.hadAnimate = true end
+
+                local tc = tp.Character
                 local th = tc and tc:FindFirstChildOfClass("Humanoid")
                 local tan = th and th:FindFirstChildOfClass("Animator")
                 local tracks = tan and tan:GetPlayingAnimationTracks() or {}
-                local reanimBody = lp.Character and lp.Character.Name == "ReanimlolBody"
-                ac.motor = ac.force or reanimBody or #tracks == 0
-                if ac.motor then
-                    ac.usedMotor = true
-                    for id, tr in pairs(ac.tracks) do tr:Stop(0.1); ac.tracks[id] = nil end
-                    applyPose(dt)
-                    return
-                end
+                local reanimBody = mc.Name == "ReanimlolBody"
+                ac.reanim = reanimBody
                 local mh = hum()
-                local man = mh and mh:FindFirstChildOfClass("Animator")
-                if not (tan and man) then return end
-                local seen = {}
+                local man = mh and (mh:FindFirstChildOfClass("Animator") or mh)
+
+                -- the target's copyable tracks
+                local wanted, nWanted = {}, 0
                 for _, t in ipairs(tracks) do
-                    local id = t.Animation and t.Animation.AnimationId
-                    if id and id ~= "" then
-                        seen[id] = true
-                        local mine = ac.tracks[id]
-                        if not mine then
-                            local anim = Instance.new("Animation")
-                            anim.AnimationId = id
-                            local ok, tr = pcall(function() return man:LoadAnimation(anim) end)
-                            if ok and tr then
-                                mine = tr
-                                ac.tracks[id] = tr
-                                tr.Priority, tr.Looped = t.Priority, t.Looped
-                                tr:Play(0.1, t.WeightCurrent > 0 and t.WeightCurrent or 1, t.Speed)
-                            end
-                        end
-                        if mine then
-                            if math.abs(mine.TimePosition - t.TimePosition) > 0.15 then mine.TimePosition = t.TimePosition end
-                            mine:AdjustSpeed(t.Speed)
-                        end
+                    local anim = t.Animation
+                    local id = anim and anim.AnimationId or ""
+                    if anim and id ~= "" and not id:find(SKIP_ID, 1, true) then
+                        wanted[t] = anim
+                        nWanted += 1
                     end
                 end
-                for id, tr in pairs(ac.tracks) do
-                    if not seen[id] then tr:Stop(0.1); ac.tracks[id] = nil end
+
+                local playing, loaded = 0, 0
+                for _, tr in pairs(ac.tracks) do
+                    if tr then loaded += 1; if tr.IsPlaying then playing += 1 end end
+                end
+                if nWanted > 0 and loaded > 0 and playing == 0 then ac.badT += dt else ac.badT = 0 end
+                local fallback = ac.badT > 0.6
+
+                -- a reanimating target has no working joints (their body is ragdolled and snapped onto an invisible
+                -- clone), so their emotes only exist as part positions, never as animation tracks
+                local tReanim = false
+                if tc then
+                    local joints = 0
+                    for _, d in ipairs(tc:GetDescendants()) do
+                        if d:IsA("Motor6D") and d.Part0 and d.Part1 and d.Part1.Parent == tc then joints += 1 end
+                        if d:IsA("BallSocketConstraint") then tReanim = true end
+                    end
+                    if joints < 3 then tReanim = true end
+                    if tc.Name == "ReanimlolBody" then tReanim = true end
+                end
+                if tReanim ~= ac.tReanim then
+                    ac.tReanim = tReanim
+                    say(tReanim and "Target is reanimating: copying pose" or "Copying animation tracks")
+                end
+
+                local rigMismatch = th and mh and th.RigType ~= mh.RigType
+                ac.motor = ac.force or tReanim or rigMismatch or reanimBody or nWanted == 0 or not man or fallback
+                if ac.motor then
+                    ac.usedMotor = true
+                    if not fallback then stopCopies() end
+                    if man and man:IsA("Animator") then
+                        for _, tr in ipairs(man:GetPlayingAnimationTracks()) do
+                            local mine = false
+                            for _, m in pairs(ac.tracks) do if m == tr then mine = true; break end end
+                            if not mine then tr:Stop(0) end
+                        end
+                    end
+                    applyPose(dt, true)
+                    return
+                end
+
+                -- clear my own other animations (default idle etc.)
+                if man:IsA("Animator") then
+                    for _, tr in ipairs(man:GetPlayingAnimationTracks()) do
+                        local mine = false
+                        for _, m in pairs(ac.tracks) do if m == tr then mine = true; break end end
+                        if not mine then tr:Stop(0) end
+                    end
+                end
+                -- start a copy of every new target track, keep timing in sync, drop copies whose source stopped
+                for t, anim in pairs(wanted) do
+                    local mine = ac.tracks[t]
+                    if mine == nil then
+                        local ok, tr = pcall(function() return man:LoadAnimation(anim) end)
+                        if ok and tr then
+                            ac.tracks[t] = tr
+                            tr:Play(0.1, 1, t.Speed)
+                            tr.TimePosition = t.TimePosition
+                        else
+                            ac.tracks[t] = false
+                        end
+                    elseif mine then
+                        if not mine.IsPlaying then mine:Play(0.1, 1, t.Speed) end
+                        local diff, len = math.abs(mine.TimePosition - t.TimePosition), mine.Length
+                        if len > 0 then diff = math.min(diff, len - diff) end
+                        if diff > 0.3 then mine.TimePosition = t.TimePosition end
+                        mine:AdjustSpeed(t.Speed)
+                    end
+                end
+                for t, tr in pairs(ac.tracks) do
+                    if not wanted[t] then
+                        if tr then pcall(function() tr:Stop(0.1); tr:Destroy() end) end
+                        ac.tracks[t] = nil
+                    end
                 end
             end)
         end, acOff)
+    def("Character", "copystretch", "Copy stretched limbs in anim copy (on/off, no arg toggles)", "[on|off]", function(a)
+        local v = tostring(a[1] or ""):lower()
+        if v == "on" then ac.stretch = true elseif v == "off" then ac.stretch = false else ac.stretch = not ac.stretch end
+        say("Copy stretch " .. (ac.stretch and "on" or "off"))
+    end, {"stretch"})
     def("Character", "kfcopy", "Copy a player's pose even if they use keyframes", "<player>", function(a)
         runLine("animcopy " .. tostring(a[1] or "") .. " motor")
     end, {"motorcopy"})
     def("Character", "unkfcopy", "Stop keyframe pose copy", nil, function() runLine("unanimcopy") end, {"unmotorcopy"})
+    def("Character", "realign", "Snap your ragdoll back onto your reanim body and clear stuck joints", nil, function()
+        if type(G.ReanimlolRealign) == "function" and G.ReanimlolRealign() then
+            say("Ragdoll realigned")
+        else
+            say("Reanim isn't running")
+        end
+    end, {"fixragdoll", "ragdollfix"})
 
     ------------------------------------------------------------------
     -- Players panel
