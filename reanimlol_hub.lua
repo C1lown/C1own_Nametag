@@ -1,21 +1,21 @@
 -- Author: c1lown
--- c1lown hub: reanimlol GUI + commands panel
+-- cookie hub: reanimlol GUI + commands panel
 
 ----------------------------------------------------------------------
 -- Theme helpers (hue shift based; saved between runs)
 ----------------------------------------------------------------------
-local Theme = {hue = 0}
+local Theme = {hue = 0.10} -- 0.10 turns the crimson base into cookie brown/orange
 local THEMES = {
-    {"Crimson", 0}, {"Ember", 0.06}, {"Gold", 0.11}, {"Emerald", 0.37}, {"Teal", 0.50},
+    {"Cookie", 0.10}, {"Crimson", 0}, {"Ember", 0.06}, {"Gold", 0.11}, {"Emerald", 0.37}, {"Teal", 0.50},
     {"Ocean", 0.60}, {"Indigo", 0.70}, {"Violet", 0.77}, {"Pink", 0.88},
 }
 do
     local g = getgenv and getgenv() or _G
-    if type(g.C1lownThemeHue) == "number" then
-        Theme.hue = g.C1lownThemeHue
+    if type(g.CookieThemeHue) == "number" then
+        Theme.hue = g.CookieThemeHue
     elseif type(readfile) == "function" and type(isfile) == "function" then
         pcall(function()
-            if isfile("C1lownHub_theme.txt") then Theme.hue = tonumber(readfile("C1lownHub_theme.txt")) or 0 end
+            if isfile("CookieHub_theme.txt") then Theme.hue = tonumber(readfile("CookieHub_theme.txt")) or 0.10 end
         end)
     end
 end
@@ -931,7 +931,7 @@ panel.BackgroundTransparency = 1
 tween(panelScale, {Scale = 1}, TweenInfo.new(.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out))
 tween(panel, {BackgroundTransparency = PANEL_ALPHA}, TweenInfo.new(.3))
 local dragBar = T("Frame", {Size = UDim2.new(1, 0, 0, BAR_H), BackgroundTransparency = 1}, panel)
-local title = label(dragBar, "reanimlol", 18, 0, 200, BAR_H, {Font = Enum.Font.GothamBold, TextSize = 18,
+local title = label(dragBar, "cookie reanim", 18, 0, 200, BAR_H, {Font = Enum.Font.GothamBold, TextSize = 18,
     TextTruncate = Enum.TextTruncate.AtEnd})
 local rigLabel = label(dragBar, "", 226, 0, 52, BAR_H, {TextColor3 = C.dim, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Right})
 do
@@ -957,8 +957,8 @@ local function setStatus(text, sticky)
     statusToken += 1
     local t = statusToken
     title.Text = text
-    if not sticky and text ~= "reanimlol" then
-        task.delay(3, function() if t == statusToken and not destroyed then title.Text = "reanimlol" end end)
+    if not sticky and text ~= "cookie reanim" then
+        task.delay(3, function() if t == statusToken and not destroyed then title.Text = "cookie reanim" end end)
     end
 end
 
@@ -1325,7 +1325,7 @@ turnOn = function(after)
             return
         end
         engineStart()
-        setStatus("reanimlol")
+        setStatus("cookie reanim")
         if after then after() end
     end)
 end
@@ -1334,14 +1334,14 @@ turnOff = function()
     busy = false
     bodyReanim.Stop()
     mainSwitch.set(false)
-    setStatus("reanimlol")
+    setStatus("cookie reanim")
 end
 bodyReanim.OnStopped(function()
     engineStop()
     if destroyed then return end
     rigLabel.Text = ""
     mainSwitch.set(false)
-    setStatus("reanimlol")
+    setStatus("cookie reanim")
 end)
 
 stopEmote = function()
@@ -1745,8 +1745,7 @@ local function assignState(s, e)
     setStatus(cap(s) .. " = " .. e.name)
 end
 local openStatePicker -- defined in the States section (shares the popup helpers)
-local stateBtn
-stateBtn = button(tabE, "Choose state to assign  ▼", 0, 284, 356, 28, function()
+local stateBtn = button(tabE, "Choose state to assign  ▼", 0, 284, 356, 28, function()
     openStatePicker(stateBtn)
 end)
 
@@ -2958,7 +2957,7 @@ local SCRIPT_BUTTONS = {
     {
         name = "ANTIVC",
         desc = "Doesnt allow you to be VC banned",
-        source = [[ loadstring(game:HttpGet("https://shield.xao.wtf/api/loader/550af30c-aaa3-4338-acab-f44010a5ef09"))()"))() ]],
+        source = [[ loadstring(game:HttpGet("https://scriptblox.com/raw/Universal-Script-Anti-Vc-Ban-225666"))() ]],
             
     },
     {
@@ -4089,7 +4088,7 @@ local function draggable(handle, target)
 end
 
 local gui = Instance.new("ScreenGui")
-gui.Name, gui.ResetOnSpawn, gui.ZIndexBehavior = "C1lownHub", false, Enum.ZIndexBehavior.Sibling
+gui.Name, gui.ResetOnSpawn, gui.ZIndexBehavior = "CookieHub", false, Enum.ZIndexBehavior.Sibling
 gui.Parent = lp:WaitForChild("PlayerGui")
 
 -- toast notifications (replace the plain status text)
@@ -4122,8 +4121,8 @@ do
     lg.Color = ColorSequence.new(C.accent2, hc(Color3.fromRGB(190, 20, 44)))
     lg.Parent = logo
 end
-mk("TextLabel", {Text = "c1", Font = Enum.Font.GothamBlack, TextSize = 15, Size = UDim2.fromScale(1, 1)}, logo)
-mk("TextLabel", {Text = "c1lown", Font = Enum.Font.GothamBold, TextSize = 15, Position = UDim2.fromOffset(54, 8),
+mk("TextLabel", {Text = "ck", Font = Enum.Font.GothamBlack, TextSize = 15, Size = UDim2.fromScale(1, 1)}, logo)
+mk("TextLabel", {Text = "cookie", Font = Enum.Font.GothamBold, TextSize = 15, Position = UDim2.fromOffset(54, 8),
     Size = UDim2.fromOffset(60, 18), TextXAlignment = Enum.TextXAlignment.Left}, bar)
 mk("TextLabel", {Text = "hub", Font = Enum.Font.GothamMedium, TextSize = 11, TextColor3 = C.dim, Position = UDim2.fromOffset(54, 26),
     Size = UDim2.fromOffset(60, 14), TextXAlignment = Enum.TextXAlignment.Left}, bar)
@@ -4153,8 +4152,8 @@ local function applyTheme(hue)
     hue = hue % 1
     local d = (hue - Theme.hue) % 1
     Theme.hue = hue
-    G.C1lownThemeHue = hue
-    pcall(function() if writefile then writefile("C1lownHub_theme.txt", tostring(hue)) end end)
+    G.CookieThemeHue = hue
+    pcall(function() if writefile then writefile("CookieHub_theme.txt", tostring(hue)) end end)
     if d < 1e-4 then return end
     for k, v in pairs(C) do if typeof(v) == "Color3" then C[k] = shiftC(v, d) end end
     for k, v in pairs(C.cat) do C.cat[k] = shiftC(v, d) end
@@ -4458,8 +4457,8 @@ do
         elseif body:sub(1, 4) ~= "\137PNG" then say("Link must be a direct .png or .jpg"); return nil end
         local h = 5381
         for i = 1, #src do h = (h * 33 + src:byte(i)) % 4294967296 end
-        pcall(function() if type(isfolder) == "function" and not isfolder("C1lownHub") then makefolder("C1lownHub") end end)
-        local path = "C1lownHub/img_" .. h .. ext
+        pcall(function() if type(isfolder) == "function" and not isfolder("CookieHub") then makefolder("CookieHub") end end)
+        local path = "CookieHub/img_" .. h .. ext
         if not pcall(writefile, path, body) then say("Couldn't save image"); return nil end
         local okA, asset = pcall(gca, path)
         if not okA or not asset then say("Couldn't load image"); return nil end
@@ -4734,7 +4733,7 @@ do
             local depth = math.clamp(num(a[1], 60), 10, 5000)
             if type(G.ReanimlolCleanup) ~= "function" then
                 local ok, err = pcall(ReanimlolModule)
-                if not ok then warn("c1lown hub: reanim failed: " .. tostring(err)); say("Reanim failed to load"); return end
+                if not ok then warn("cookie hub: reanim failed: " .. tostring(err)); say("Reanim failed to load"); return end
             end
             if type(G.ReanimlolTurnOn) ~= "function" then say("Reanim not ready"); return end
             G.ReanimlolTurnOn(function()
@@ -5263,7 +5262,7 @@ reanimBtn.Activated:Connect(function()
         pcall(G.ReanimlolCleanup)
     else
         local ok, err = pcall(ReanimlolModule)
-        if not ok then warn("c1lown hub: reanim failed: " .. tostring(err)); say("Reanim failed to load") end
+        if not ok then warn("cookie hub: reanim failed: " .. tostring(err)); say("Reanim failed to load") end
     end
 end)
 startLoop("ui", 0.4, function()
