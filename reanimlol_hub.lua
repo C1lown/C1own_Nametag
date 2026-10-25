@@ -130,18 +130,27 @@ local function cloneCharacter(model)
   end)
   for _, object in ipairs(changed) do pcall(function() object.Archivable = false end) end
   if not ok or not clone then return "Character clone failed." end
-  for _, d in ipairs(clone:GetDescendants()) do
-    if d:IsA("LuaSourceContainer") then d:Destroy() end
-  end
   clone.Name = "ReanimlolBody"
-  local humanoid = clone:FindFirstChildOfClass("Humanoid")
+  -- one pass over the clone: drop tools and scripts, make it invisible, and check it has Motor6D joints
+  local humanoid, motors = nil, false
+  for _, c in ipairs(clone:GetChildren()) do
+    if c:IsA("Tool") then c:Destroy()
+    elseif not humanoid and c:IsA("Humanoid") then humanoid = c end
+  end
   if not humanoid then clone:Destroy(); return "Cloned character has no humanoid." end
+  for _, d in ipairs(clone:GetDescendants()) do
+    if d:IsA("LuaSourceContainer") then d:Destroy()
+    elseif d:IsA("BasePart") then d.Transparency = 1; d.CanCollide = false
+    elseif d:IsA("Decal") or d:IsA("Texture") then d.Transparency = 1
+    elseif d:IsA("BillboardGui") then d.Enabled = false
+    elseif d:IsA("Motor6D") then motors = true end
+  end
   humanoid.RequiresNeck = false
   humanoid.BreakJointsOnDeath = false
   humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
   local ff = clone:FindFirstChildWhichIsA("ForceField")
   if ff then ff:Destroy() end
-  return clone
+  return clone, motors
 end
 
 local function setInvisible(model)
@@ -204,29 +213,34 @@ local function startReanimation()
     local root = character and character:FindFirstChild("HumanoidRootPart")
     assert(humanoid and root and humanoid.Health > 0, "Character not ready.")
     assert(not root.Anchored, "Character is anchored.")
-    local remote, argsOn, isLocal = findRagdoll(true)
-    assert(remote, "This game has no known ragdoll remote, so this core can't run here.")
-    local _, argsOff = findRagdoll(false)
-    argsOff = argsOff or argsOn
-    assert(rev == S.rev, "Start cancelled.")
-    local controls
-    local scripts = player:FindFirstChild("PlayerScripts")
-    local module = scripts and scripts:FindFirstChild("PlayerModule")
-    if module and module:IsA("ModuleScript") then
-      local loaded, value = pcall(function() return require(module):GetControls() end)
-      if loaded and value and type(value.GetMoveVector) == "function" then controls = value end
+    -- the remote lookup (which can wait on the server) and the controls module are cached after the first start
+    local remote, argsOn, isLocal, argsOff
+    local rc = S.ragCache
+    if rc and rc.remote.Parent then
+      remote, argsOn, isLocal, argsOff = rc.remote, rc.on, rc.isLocal, rc.off
+    else
+      remote, argsOn, isLocal = findRagdoll(true)
+      assert(remote, "This game has no known ragdoll remote, so this core can't run here.")
+      local _, off = findRagdoll(false)
+      argsOff = off or argsOn
+      S.ragCache = {remote = remote, on = argsOn, off = argsOff, isLocal = isLocal}
     end
-    local copy = cloneCharacter(character)
+    assert(rev == S.rev, "Start cancelled.")
+    local controls = S.controlsCache
+    if not controls then
+      local scripts = player:FindFirstChild("PlayerScripts")
+      local module = scripts and scripts:FindFirstChild("PlayerModule")
+      if module and module:IsA("ModuleScript") then
+        local loaded, value = pcall(function() return require(module):GetControls() end)
+        if loaded and value and type(value.GetMoveVector) == "function" then controls = value; S.controlsCache = value end
+      end
+    end
+    local copy, motors = cloneCharacter(character)
     assert(typeof(copy) == "Instance", tostring(copy))
     local copyHumanoid, copyRoot = copy:FindFirstChildOfClass("Humanoid"), copy:FindFirstChild("HumanoidRootPart")
+    if not (copyHumanoid and copyRoot and motors) then copy:Destroy() end
     assert(copyHumanoid and copyRoot, "Cloned rig is incomplete.")
-    local motors = false
-    for _, d in ipairs(copy:GetDescendants()) do if d:IsA("Motor6D") then motors = true; break end end
     assert(motors, "This rig needs Motor6D joints.")
-    for _, d in ipairs(copy:GetDescendants()) do
-      if d:IsA("Tool") then d:Destroy() end
-    end
-    setInvisible(copy)
     copy.Parent = Workspace
     copyHumanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
     local s = {
@@ -426,8 +440,14 @@ local function sample(curve, time, duration, looped)
     local n = #curve
     if n == 1 then return curve[1].value end
     local a, b
-    for i = n, 1, -1 do
-        if curve[i].time <= time then a = curve[i]; b = curve[i + 1]; break end
+    if curve[1].time <= time then
+        -- binary search for the last key at or before `time` (long recordings have hundreds of keys)
+        local lo, hi = 1, n
+        while lo < hi do
+            local mid = (lo + hi + 1) // 2
+            if curve[mid].time <= time then lo = mid else hi = mid - 1 end
+        end
+        a, b = curve[lo], curve[lo + 1]
     end
     local at, bt
     if not a then
@@ -441,8 +461,10 @@ local function sample(curve, time, duration, looped)
     else at, bt = a.time, b.time end
     local alpha = bt > at and math.clamp((time - at) / (bt - at), 0, 1) or 1
     if a.style == "Constant" then alpha = 0
-    else alpha = TweenService:GetValue(alpha, styles[a.style] or Enum.EasingStyle.Linear,
-        directions[a.direction] or Enum.EasingDirection.InOut) end
+    elseif a.style ~= "Linear" and styles[a.style] then -- Linear needs no engine call
+        alpha = TweenService:GetValue(alpha, styles[a.style], directions[a.direction] or Enum.EasingDirection.InOut)
+    end
+    if alpha <= 0 then return a.value end
     return a.value:Lerp(b.value, alpha)
 end
 
