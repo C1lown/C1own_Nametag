@@ -131,7 +131,7 @@ function Cookie.layer(frame, radius, w, h, count, minD, maxD, alpha)
         local k = Cookie.make(cg, d, 0, false, rng)
         k.AnchorPoint = Vector2.new(.5, .5)
         k.Rotation = rng:NextInteger(0, 359)
-        local f = {f = k, x = rng:NextNumber(0, w), y = rng:NextNumber(0, h), w = w, d = d,
+        local f = {f = k, layer = cg, x = rng:NextNumber(0, w), y = rng:NextNumber(0, h), w = w, d = d,
             vx = rng:NextNumber(3, 9) * (rng:NextInteger(0, 1) == 0 and -1 or 1), spin = rng:NextNumber(-8, 8)}
         k.Position = UDim2.fromOffset(f.x, f.y)
         Cookie.floaters[#Cookie.floaters + 1] = f
@@ -145,6 +145,8 @@ function Cookie.layer(frame, radius, w, h, count, minD, maxD, alpha)
                     table.remove(list, i)
                 else
                     alive += 1
+                    local sz = f.layer.AbsoluteSize
+                    if sz.X > 0 then f.w = sz.X; if f.y > sz.Y then f.y = f.y % sz.Y end end
                     f.x += f.vx * dt
                     if f.x > f.w + f.d then f.x = -f.d elseif f.x < -f.d then f.x = f.w + f.d end
                     f.f.Position = UDim2.fromOffset(f.x, f.y)
@@ -166,6 +168,16 @@ function Cookie.setVisible(v)
         local l = Cookie.layers[i]
         if l.Parent then l.Visible = v else table.remove(Cookie.layers, i) end
     end
+end
+
+-- keeps a dragged window fully on screen: returns the drag delta limited so `target` stays inside its ScreenGui
+local function clampDrag(target, startAbs, d)
+    local g = target:FindFirstAncestorOfClass("ScreenGui")
+    if not g then return d end
+    local go, gs, ts = g.AbsolutePosition, g.AbsoluteSize, target.AbsoluteSize
+    local x1, x2 = go.X - startAbs.X, go.X + gs.X - ts.X - startAbs.X
+    local y1, y2 = go.Y - startAbs.Y, go.Y + gs.Y - ts.Y - startAbs.Y
+    return Vector2.new(math.clamp(d.X, math.min(x1, x2), math.max(x1, x2)), math.clamp(d.Y, math.min(y1, y2), math.max(y1, y2)))
 end
 
 local function ReanimlolModule()
@@ -1059,15 +1071,15 @@ local title = label(dragBar, "cookie reanim", 18, 0, 200, BAR_H, {Font = Enum.Fo
     TextTruncate = Enum.TextTruncate.AtEnd})
 local rigLabel = label(dragBar, "", 226, 0, 52, BAR_H, {TextColor3 = C.dim, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Right})
 do
-    local dragging, dragStart, startPos = false
+    local dragging, dragStart, startPos, startAbs = false
     dragBar.InputBegan:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-            dragging, dragStart, startPos = true, i.Position, panel.Position
+            dragging, dragStart, startPos, startAbs = true, i.Position, panel.Position, panel.AbsolutePosition
         end
     end)
     connect(UserInputService.InputChanged, function(i)
         if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
-            local d = i.Position - dragStart
+            local d = clampDrag(panel, startAbs, Vector2.new(i.Position.X - dragStart.X, i.Position.Y - dragStart.Y))
             panel.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
         end
     end)
@@ -4213,15 +4225,15 @@ local function fieldBox(parent, placeholder, x, y, w, h)
     return b
 end
 local function draggable(handle, target)
-    local dragging, ds, sp = false
+    local dragging, ds, sp, sa = false
     handle.InputBegan:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-            dragging, ds, sp = true, i.Position, target.Position
+            dragging, ds, sp, sa = true, i.Position, target.Position, target.AbsolutePosition
         end
     end)
     bind(UIS.InputChanged, function(i)
         if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
-            local d = i.Position - ds
+            local d = clampDrag(target, sa, Vector2.new(i.Position.X - ds.X, i.Position.Y - ds.Y))
             target.Position = UDim2.new(sp.X.Scale, sp.X.Offset + d.X, sp.Y.Scale, sp.Y.Offset + d.Y)
         end
     end)
@@ -4273,7 +4285,6 @@ local barScale = Instance.new("UIScale")
 barScale.Scale = .8
 barScale.Parent = bar
 tween(barScale, {Scale = 1}, TweenInfo.new(.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out))
-draggable(bar, bar)
 local logo = mk("Frame", {Size = UDim2.fromOffset(36, 36), Position = UDim2.fromOffset(9, 9), BackgroundColor3 = Color3.new(1, 1, 1)}, bar)
 corner(logo, 18)
 do
@@ -4284,9 +4295,9 @@ do
 end
 logo.BackgroundTransparency = 1
 Cookie.make(logo, 36, 0, true, Random.new(7))
-mk("TextLabel", {Text = "cookie", Font = Enum.Font.GothamBold, TextSize = 15, Position = UDim2.fromOffset(54, 8),
+local titleA = mk("TextLabel", {Text = "cookie", Font = Enum.Font.GothamBold, TextSize = 15, Position = UDim2.fromOffset(54, 8),
     Size = UDim2.fromOffset(60, 18), TextXAlignment = Enum.TextXAlignment.Left}, bar)
-mk("TextLabel", {Text = "hub", Font = Enum.Font.GothamMedium, TextSize = 11, TextColor3 = C.dim, Position = UDim2.fromOffset(54, 26),
+local titleB = mk("TextLabel", {Text = "hub", Font = Enum.Font.GothamMedium, TextSize = 11, TextColor3 = C.dim, Position = UDim2.fromOffset(54, 26),
     Size = UDim2.fromOffset(60, 14), TextXAlignment = Enum.TextXAlignment.Left}, bar)
 
 local function barBtn(text, x, w)
@@ -4310,6 +4321,105 @@ closeBtn.BackgroundTransparency = 0
 
 -- theme button + commands (hue-shifts every GUI color, saved between runs)
 local themeBtn = barBtn("Theme", 378, 70)
+
+-- docking: the bar sticks to a screen edge (top / bottom / left / right), can't leave the screen, and can minimize
+local minBtn = barBtn("-", 0, 34)
+local logoBtn = mk("TextButton", {Text = "", Size = UDim2.fromOffset(36, 36), Position = UDim2.fromOffset(9, 9),
+    BackgroundTransparency = 1, ZIndex = 5}, bar)
+local dock = {edge = "top", frac = .5, mini = false}
+local drag = {on = false, moved = false}
+local BAR_MARGIN = 6
+local function screenSize()
+    local s = gui.AbsoluteSize
+    if s.X < 100 or s.Y < 100 then
+        local v = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1280, 720)
+        return v.X, math.max(v.Y - 36, 200)
+    end
+    return s.X, s.Y
+end
+local function dockVertical() return dock.edge == "left" or dock.edge == "right" end
+local function barDims()
+    if dock.mini then return 54, 54 end
+    if dockVertical() then return 130, 248 end
+    return 534, 54
+end
+local function barXY(w, h)
+    local sw, sh = screenSize()
+    if dockVertical() then
+        return dock.edge == "left" and BAR_MARGIN or sw - w - BAR_MARGIN,
+            math.clamp(dock.frac * sh - h / 2, BAR_MARGIN, math.max(BAR_MARGIN, sh - h - BAR_MARGIN))
+    end
+    return math.clamp(dock.frac * sw - w / 2, BAR_MARGIN, math.max(BAR_MARGIN, sw - w - BAR_MARGIN)),
+        dock.edge == "top" and BAR_MARGIN or sh - h - BAR_MARGIN
+end
+local function layoutBar(animate)
+    local w, h = barDims()
+    local x, y = barXY(w, h)
+    local show = not dock.mini
+    for _, o in ipairs({titleA, titleB, reanimBtn, cmdBtn, playersBtn, themeBtn, minBtn, closeBtn}) do o.Visible = show end
+    if show then
+        if dockVertical() then
+            for i, b in ipairs({reanimBtn, cmdBtn, playersBtn, themeBtn}) do
+                b.Position, b.Size = UDim2.fromOffset(12, 62 + (i - 1) * 36), UDim2.fromOffset(106, 30)
+            end
+            minBtn.Position, minBtn.Size = UDim2.fromOffset(12, 206), UDim2.fromOffset(50, 30)
+            closeBtn.Position, closeBtn.Size = UDim2.fromOffset(68, 206), UDim2.fromOffset(50, 30)
+        else
+            local xs = 122
+            for _, spec in ipairs({{reanimBtn, 74}, {cmdBtn, 92}, {playersBtn, 78}, {themeBtn, 70}, {minBtn, 34}, {closeBtn, 34}}) do
+                spec[1].Position, spec[1].Size = UDim2.fromOffset(xs, 12), UDim2.fromOffset(spec[2], 30)
+                xs = xs + spec[2] + 4
+            end
+        end
+    end
+    local pos, size = UDim2.fromOffset(x, y), UDim2.fromOffset(w, h)
+    if animate then
+        tween(bar, {Position = pos, Size = size}, TweenInfo.new(.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out))
+    else
+        bar.Position, bar.Size = pos, size
+    end
+end
+local function setMini(v) dock.mini = v; layoutBar(true) end
+minBtn.Activated:Connect(function() setMini(true) end)
+logoBtn.Activated:Connect(function()
+    if drag.moved then return end
+    if dock.mini then setMini(false) end
+end)
+bar.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+        drag.on, drag.moved, drag.ds = true, false, i.Position
+        drag.start = bar.AbsolutePosition - gui.AbsolutePosition
+    end
+end)
+bind(UIS.InputChanged, function(i)
+    if not drag.on or not (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then return end
+    local d = i.Position - drag.ds
+    if not drag.moved and d.Magnitude < 5 then return end
+    drag.moved = true
+    local sw, sh = screenSize()
+    local w, h = barDims()
+    bar.Position = UDim2.fromOffset(math.clamp(drag.start.X + d.X, 0, math.max(0, sw - w)),
+        math.clamp(drag.start.Y + d.Y, 0, math.max(0, sh - h)))
+end)
+bind(UIS.InputEnded, function(i)
+    if not drag.on or not (i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch) then return end
+    drag.on = false
+    if not drag.moved then return end
+    local sw, sh = screenSize()
+    local w, h = barDims()
+    local p = bar.AbsolutePosition - gui.AbsolutePosition
+    local dist = {top = p.Y, bottom = sh - (p.Y + h), left = p.X, right = sw - (p.X + w)}
+    local best, bd = "top", math.huge
+    for _, e in ipairs({"top", "bottom", "left", "right"}) do
+        if dist[e] < bd then best, bd = e, dist[e] end
+    end
+    dock.edge = best
+    dock.frac = (best == "left" or best == "right") and (p.Y + h / 2) / sh or (p.X + w / 2) / sw
+    layoutBar(true)
+    task.delay(.15, function() drag.moved = false end)
+end)
+bind(gui:GetPropertyChangedSignal("AbsoluteSize"), function() layoutBar(false) end)
+layoutBar(false)
 local function applyTheme(hue)
     hue = hue % 1
     local d = (hue - Theme.hue) % 1
