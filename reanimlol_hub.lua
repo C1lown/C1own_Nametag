@@ -521,7 +521,7 @@ local settings = {
     keyPause = "Y", keyRewind = "U", keyReverse = "I", keyDrive = "LeftAlt",
     speedBinds = {},
 }
-local data = {favorites = {}, custom = {}, states = {}, binds = {}, settings = settings}
+local data = {favorites = {}, custom = {}, states = {}, binds = {}, ui = {}, settings = settings}
 
 do -- load
     if hasFS then
@@ -529,7 +529,7 @@ do -- load
         if ok and raw then
             local ok2, decoded = pcall(function() return HttpService:JSONDecode(raw) end)
             if ok2 and type(decoded) == "table" then
-                for _, k in ipairs({"favorites", "custom", "states", "binds"}) do
+                for _, k in ipairs({"favorites", "custom", "states", "binds", "ui"}) do
                     if type(decoded[k]) == "table" then data[k] = decoded[k] end
                 end
                 if type(decoded.settings) == "table" then
@@ -1084,8 +1084,20 @@ do
         end
     end)
     connect(UserInputService.InputEnded, function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then dragging = false end
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            if dragging then -- remember where the panel was left
+                local gp = panel.AbsolutePosition - gui.AbsolutePosition
+                data.ui.x, data.ui.y = math.floor(gp.X), math.floor(gp.Y)
+                saveSoon()
+            end
+            dragging = false
+        end
     end)
+end
+if type(data.ui.x) == "number" and type(data.ui.y) == "number" then -- restore the last panel position (kept on screen)
+    local gs = gui.AbsoluteSize
+    if gs.X < 100 or gs.Y < 100 then gs = workspace.CurrentCamera.ViewportSize end
+    panel.Position = UDim2.fromOffset(math.clamp(data.ui.x, 0, math.max(0, gs.X - PANEL_W)), math.clamp(data.ui.y, 0, math.max(0, gs.Y - PANEL_H)))
 end
 
 local statusToken = 0
@@ -1101,7 +1113,7 @@ end
 local turnOn, turnOff, playEntry, stopEmote
 -- window buttons: minimize (collapses to the title bar) and close, round like Novoline's
 local function barButton(rightOffset, glyph, cb)
-    local b = T("TextButton", {Size = UDim2.fromOffset(28, 28), Position = UDim2.new(1, -rightOffset - 28, 0.5, -14), Text = glyph,
+    local b = T("TextButton", {Size = UDim2.fromOffset(28, 28), Position = UDim2.new(1, -rightOffset - 28, 0, (BAR_H - 28) / 2), Text = glyph,
         TextSize = 15, TextTransparency = 0, BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = .82, ZIndex = 20}, panel)
     corner(b, 14)
     b.MouseEnter:Connect(function() tween(b, {BackgroundTransparency = .6}, TweenInfo.new(.15)) end)
@@ -1625,6 +1637,8 @@ corner(tabPill, 8)
 local currentTab, tabToken = "Emotes", 0
 local function showTab(name)
     if name == currentTab and tabFrames[name].Visible then return end
+    data.ui.tab = name
+    saveSoon()
     tabToken += 1
     local token = tabToken
     local old = currentTab
@@ -2966,6 +2980,7 @@ refreshChips()
 rebuildList()
 refreshStateRows()
 updateRecUI()
+if type(data.ui.tab) == "string" and tabFrames[data.ui.tab] and data.ui.tab ~= "Emotes" then showTab(data.ui.tab) end
 shared.ReanimlolTurnOn = function(cb) turnOn(cb) end
 shared.ReanimlolHide = function(depth) return bodyReanim.SetHide(depth) end
 shared.ReanimlolRealign = function() return bodyReanim.Realign() end
@@ -3018,6 +3033,32 @@ local function hum() local c = lp.Character; return c and c:FindFirstChildOfClas
 local function root() local c = lp.Character; return c and c:FindFirstChild("HumanoidRootPart") end
 local function num(s, d) local n = tonumber(s); if n == nil then return d end; return n end
 local function weak() return setmetatable({}, {__mode = "k"}) end
+
+-- saved hub config (CookieHub/config.json): dock edge/minimized, panel positions + open state, cookies, glow
+local CFG_FILE = "CookieHub/config.json"
+local cfg = {}
+local hasFS = type(writefile) == "function" and type(readfile) == "function" and type(isfile) == "function"
+if hasFS then
+    local ok, raw = pcall(function() if isfile(CFG_FILE) then return readfile(CFG_FILE) end end)
+    if ok and raw then
+        local ok2, d = pcall(function() return HttpService:JSONDecode(raw) end)
+        if ok2 and type(d) == "table" then cfg = d end
+    end
+end
+local function saveCfgNow()
+    if not hasFS then return end
+    pcall(function()
+        if type(isfolder) == "function" and type(makefolder) == "function" and not isfolder("CookieHub") then makefolder("CookieHub") end
+        writefile(CFG_FILE, HttpService:JSONEncode(cfg))
+    end)
+end
+local cfgTok = 0
+local function saveCfg()
+    cfgTok = cfgTok + 1
+    local t = cfgTok
+    task.delay(.4, function() if t == cfgTok then saveCfgNow() end end)
+end
+Cookie.on = cfg.cookies ~= false
 local function typing() return UIS:GetFocusedTextBox() ~= nil end
 local function clip(text)
     if type(setclipboard) == "function" then setclipboard(tostring(text)); return true end
@@ -4183,6 +4224,7 @@ local function glass(frame, radius)
     for _, spec in ipairs({{5, .72}, {11, .86}, {19, .94}}) do -- layered strokes fake a blurred cookie-gold glow
         local gs = Instance.new("UIStroke")
         gs.Color, gs.Thickness, gs.Transparency, gs.ApplyStrokeMode = C.accent2, spec[1], spec[2], Enum.ApplyStrokeMode.Border
+        gs.Enabled = cfg.glow ~= false
         gs.Parent = frame
         glowStrokes[#glowStrokes + 1] = {gs, spec[2]}
     end
@@ -4224,7 +4266,15 @@ local function fieldBox(parent, placeholder, x, y, w, h)
     b.FocusLost:Connect(function() tween(st, {Color = C.div, Transparency = .35}, TweenInfo.new(.2)) end)
     return b
 end
-local function draggable(handle, target)
+local function savePos(frame, key)
+    local g = frame:FindFirstAncestorOfClass("ScreenGui")
+    if not g then return end
+    local p = frame.AbsolutePosition - g.AbsolutePosition
+    cfg.pos = cfg.pos or {}
+    cfg.pos[key] = {math.floor(p.X), math.floor(p.Y)}
+    saveCfg()
+end
+local function draggable(handle, target, key)
     local dragging, ds, sp, sa = false
     handle.InputBegan:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
@@ -4238,7 +4288,10 @@ local function draggable(handle, target)
         end
     end)
     bind(UIS.InputEnded, function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then dragging = false end
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            if dragging and key then savePos(target, key) end
+            dragging = false
+        end
     end)
 end
 
@@ -4251,6 +4304,8 @@ def("Visual", "cookies", "Show/hide the cookies on the GUI (on/off, no arg toggl
     local v = tostring(a[1] or ""):lower()
     if v == "on" then Cookie.on = true elseif v == "off" then Cookie.on = false else Cookie.on = not Cookie.on end
     Cookie.setVisible(Cookie.on)
+    cfg.cookies = Cookie.on
+    saveCfg()
     say("GUI cookies " .. (Cookie.on and "on" or "off"))
 end, {"cookiebg"})
 def("Visual", "cookieglow", "Turn the warm cookie glow on/off", "[on|off]", function(a)
@@ -4260,6 +4315,8 @@ def("Visual", "cookieglow", "Turn the warm cookie glow on/off", "[on|off]", func
     if v == "on" then want = true elseif v == "off" then want = false else want = not cur end
     for _, e in ipairs(glowStrokes) do e[1].Enabled = want end
     for _, e in ipairs(Cookie.halos) do e[1].Enabled = want end
+    cfg.glow = want
+    saveCfg()
     say("Cookie glow " .. (want and "on" or "off"))
 end)
 off(function() Cookie.setVisible(true); Cookie.on = true end)
@@ -4295,6 +4352,7 @@ do
 end
 logo.BackgroundTransparency = 1
 Cookie.make(logo, 36, 0, true, Random.new(7))
+if cfg.glow == false then for _, e in ipairs(Cookie.halos) do e[1].Enabled = false end end
 local titleA = mk("TextLabel", {Text = "cookie", Font = Enum.Font.GothamBold, TextSize = 15, Position = UDim2.fromOffset(54, 8),
     Size = UDim2.fromOffset(60, 18), TextXAlignment = Enum.TextXAlignment.Left}, bar)
 local titleB = mk("TextLabel", {Text = "hub", Font = Enum.Font.GothamMedium, TextSize = 11, TextColor3 = C.dim, Position = UDim2.fromOffset(54, 26),
@@ -4323,10 +4381,25 @@ closeBtn.BackgroundTransparency = 0
 local themeBtn = barBtn("Theme", 378, 70)
 
 -- docking: the bar sticks to a screen edge (top / bottom / left / right), can't leave the screen, and can minimize
-local minBtn = barBtn("-", 0, 34)
+local minBtn = barBtn("-", 0, 24)
+minBtn.Size = UDim2.fromOffset(24, 24)
 local logoBtn = mk("TextButton", {Text = "", Size = UDim2.fromOffset(36, 36), Position = UDim2.fromOffset(9, 9),
     BackgroundTransparency = 1, ZIndex = 5}, bar)
+for _, b in ipairs({minBtn, closeBtn}) do
+    b.Size = UDim2.fromOffset(24, 24)
+    local cr = b:FindFirstChildOfClass("UICorner")
+    if cr then cr.CornerRadius = UDim.new(0, 12) end
+end
 local dock = {edge = "top", frac = .5, mini = false}
+do
+    local d = cfg.dock
+    if type(d) == "table" then
+        if d.edge == "top" or d.edge == "bottom" or d.edge == "left" or d.edge == "right" then dock.edge = d.edge end
+        if type(d.frac) == "number" then dock.frac = math.clamp(d.frac, 0, 1) end
+        dock.mini = d.mini == true
+    end
+end
+local function saveDock() cfg.dock = {edge = dock.edge, frac = dock.frac, mini = dock.mini}; saveCfg() end
 local drag = {on = false, moved = false}
 local BAR_MARGIN = 6
 local function screenSize()
@@ -4340,8 +4413,8 @@ end
 local function dockVertical() return dock.edge == "left" or dock.edge == "right" end
 local function barDims()
     if dock.mini then return 54, 54 end
-    if dockVertical() then return 130, 248 end
-    return 534, 54
+    if dockVertical() then return 164, 208 end
+    return 536, 54
 end
 local function barXY(w, h)
     local sw, sh = screenSize()
@@ -4360,16 +4433,18 @@ local function layoutBar(animate)
     if show then
         if dockVertical() then
             for i, b in ipairs({reanimBtn, cmdBtn, playersBtn, themeBtn}) do
-                b.Position, b.Size = UDim2.fromOffset(12, 62 + (i - 1) * 36), UDim2.fromOffset(106, 30)
+                b.Position, b.Size = UDim2.fromOffset(12, 58 + (i - 1) * 36), UDim2.fromOffset(140, 30)
             end
-            minBtn.Position, minBtn.Size = UDim2.fromOffset(12, 206), UDim2.fromOffset(50, 30)
-            closeBtn.Position, closeBtn.Size = UDim2.fromOffset(68, 206), UDim2.fromOffset(50, 30)
+            minBtn.Position, closeBtn.Position = UDim2.fromOffset(110, 8), UDim2.fromOffset(138, 8) -- top right corner
+            titleA.Size, titleB.Size = UDim2.fromOffset(50, 18), UDim2.fromOffset(50, 14)
         else
             local xs = 122
-            for _, spec in ipairs({{reanimBtn, 74}, {cmdBtn, 92}, {playersBtn, 78}, {themeBtn, 70}, {minBtn, 34}, {closeBtn, 34}}) do
+            for _, spec in ipairs({{reanimBtn, 74}, {cmdBtn, 92}, {playersBtn, 78}, {themeBtn, 70}}) do
                 spec[1].Position, spec[1].Size = UDim2.fromOffset(xs, 12), UDim2.fromOffset(spec[2], 30)
                 xs = xs + spec[2] + 4
             end
+            minBtn.Position, closeBtn.Position = UDim2.fromOffset(476, 15), UDim2.fromOffset(504, 15) -- top right corner
+            titleA.Size, titleB.Size = UDim2.fromOffset(60, 18), UDim2.fromOffset(60, 14)
         end
     end
     local pos, size = UDim2.fromOffset(x, y), UDim2.fromOffset(w, h)
@@ -4379,7 +4454,7 @@ local function layoutBar(animate)
         bar.Position, bar.Size = pos, size
     end
 end
-local function setMini(v) dock.mini = v; layoutBar(true) end
+local function setMini(v) dock.mini = v; layoutBar(true); saveDock() end
 minBtn.Activated:Connect(function() setMini(true) end)
 logoBtn.Activated:Connect(function()
     if drag.moved then return end
@@ -4416,10 +4491,18 @@ bind(UIS.InputEnded, function(i)
     dock.edge = best
     dock.frac = (best == "left" or best == "right") and (p.Y + h / 2) / sh or (p.X + w / 2) / sw
     layoutBar(true)
+    saveDock()
     task.delay(.15, function() drag.moved = false end)
 end)
 bind(gui:GetPropertyChangedSignal("AbsoluteSize"), function() layoutBar(false) end)
 layoutBar(false)
+local function restorePos(frame, key)
+    local sp = cfg.pos and cfg.pos[key]
+    if type(sp) ~= "table" or type(sp[1]) ~= "number" or type(sp[2]) ~= "number" then return end
+    local sw, sh = screenSize()
+    frame.Position = UDim2.fromOffset(math.clamp(sp[1], 0, math.max(0, sw - frame.Size.X.Offset)),
+        math.clamp(sp[2], 0, math.max(0, sh - frame.Size.Y.Offset)))
+end
 local function applyTheme(hue)
     hue = hue % 1
     local d = (hue - Theme.hue) % 1
@@ -4460,7 +4543,8 @@ glass(panel, 20)
 local pScale = Instance.new("UIScale")
 pScale.Parent = panel
 local head = mk("Frame", {Size = UDim2.new(1, 0, 0, 52), BackgroundTransparency = 1}, panel)
-draggable(head, panel)
+draggable(head, panel, "cmd")
+restorePos(panel, "cmd")
 mk("TextLabel", {Text = "Commands", Font = Enum.Font.GothamBold, TextSize = 20, Position = UDim2.fromOffset(20, 0),
     Size = UDim2.fromOffset(160, 52), TextXAlignment = Enum.TextXAlignment.Left}, head)
 local countPill = mk("Frame", {Size = UDim2.fromOffset(104, 24), Position = UDim2.new(1, -124, 0, 14), BackgroundColor3 = C.accent,
@@ -5356,7 +5440,8 @@ do
     local ppScale = Instance.new("UIScale")
     ppScale.Parent = pp
     local ph = mk("Frame", {Size = UDim2.new(1, 0, 0, 52), BackgroundTransparency = 1}, pp)
-    draggable(ph, pp)
+    draggable(ph, pp, "players")
+    restorePos(pp, "players")
     mk("TextLabel", {Text = "Players", Font = Enum.Font.GothamBold, TextSize = 20, Position = UDim2.fromOffset(20, 0),
         Size = UDim2.fromOffset(160, 52), TextXAlignment = Enum.TextXAlignment.Left}, ph)
     accentLine(pp, 20, 52, PW2 - 40)
@@ -5494,6 +5579,9 @@ do
     refreshPlayers()
 
     local function setPP(show)
+        cfg.open = cfg.open or {}
+        cfg.open.players = show and true or false
+        saveCfg()
         if show then
             pp.Visible = true
             ppScale.Scale = .9
@@ -5508,12 +5596,16 @@ do
         tween(playersBtn, {BackgroundColor3 = show and C.accent or C.card, BackgroundTransparency = show and 0 or .2}, TweenInfo.new(.2))
     end
     playersBtn.Activated:Connect(function() setPP(not pp.Visible) end)
+    if cfg.open and cfg.open.players then setPP(true) end
 end
 rebuild()
 countLbl.Text = #LIST .. " commands"
 
 -- open / close the panels
 local function setPanel(show)
+    cfg.open = cfg.open or {}
+    cfg.open.cmd = show and true or false
+    saveCfg()
     if show then
         panel.Visible = true
         pScale.Scale = .92
@@ -5527,6 +5619,7 @@ local function setPanel(show)
     tween(cmdBtn, {BackgroundColor3 = show and C.accent or C.card, BackgroundTransparency = show and 0 or .2}, TweenInfo.new(.2))
 end
 cmdBtn.Activated:Connect(function() setPanel(not panel.Visible) end)
+if cfg.open and cfg.open.cmd then setPanel(true) end
 
 local function reanimOpen() return type(G.ReanimlolCleanup) == "function" end
 reanimBtn.Activated:Connect(function()
@@ -5537,10 +5630,18 @@ reanimBtn.Activated:Connect(function()
         if not ok then warn("cookie hub: reanim failed: " .. tostring(err)); say("Reanim failed to load") end
     end
 end)
+local lastReanim
 startLoop("ui", 0.4, function()
     local on = reanimOpen()
+    if lastReanim ~= nil and on ~= lastReanim then cfg.reanimOpen = on; saveCfg() end
+    lastReanim = on
     tween(reanimBtn, {BackgroundColor3 = on and C.accent or C.card, BackgroundTransparency = on and 0 or .2}, TweenInfo.new(.2))
 end)
+
+if cfg.reanimOpen and not reanimOpen() then -- the reanim panel was open last time
+    local ok, err = pcall(ReanimlolModule)
+    if not ok then warn("cookie hub: reanim failed: " .. tostring(err)) end
+end
 
 -- ";" jumps to the command bar
 bind(UIS.InputBegan, function(i, processed)
@@ -5554,6 +5655,7 @@ end)
 local function cleanup()
     if destroyed then return end
     destroyed = true
+    saveCfgNow()
     for _, f in ipairs(OFFS) do pcall(f) end
     for k in pairs(LOOPS) do LOOPS[k] = nil end
     for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
@@ -5567,4 +5669,132 @@ G.C1lownHubCleanup = cleanup
 return {Destroy = cleanup}
 end
 
-return HubMain()
+----------------------------------------------------------------------
+-- Key system: the hub only starts once the right key is entered (a correct key is remembered on this device)
+----------------------------------------------------------------------
+local HUB_KEY = "THISCRIPTISTHEBEST"
+local KEY_FILE = "CookieHub/key.txt"
+
+local function savedKeyOk()
+    if type(isfile) ~= "function" or type(readfile) ~= "function" then return false end
+    local ok, v = pcall(function() if isfile(KEY_FILE) then return readfile(KEY_FILE) end end)
+    return ok and type(v) == "string" and (v:gsub("%s+", "")) == HUB_KEY
+end
+local function rememberKey()
+    pcall(function()
+        if type(writefile) ~= "function" then return end
+        if type(isfolder) == "function" and type(makefolder) == "function" and not isfolder("CookieHub") then makefolder("CookieHub") end
+        writefile(KEY_FILE, HUB_KEY)
+    end)
+end
+
+local function KeyGate()
+    if savedKeyOk() then return HubMain() end
+
+    local Players = game:GetService("Players")
+    local TweenService = game:GetService("TweenService")
+    local lp = Players.LocalPlayer
+    local old = lp:WaitForChild("PlayerGui"):FindFirstChild("CookieHubKey")
+    if old then old:Destroy() end
+
+    local kg = Instance.new("ScreenGui")
+    kg.Name, kg.ResetOnSpawn, kg.DisplayOrder = "CookieHubKey", false, 50
+    kg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    kg.Parent = lp:WaitForChild("PlayerGui")
+
+    local W, H = 360, 232
+    local box = cnew("Frame", {Size = UDim2.fromOffset(W, H), AnchorPoint = Vector2.new(.5, .5), Position = UDim2.fromScale(.5, .5),
+        BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = .08, Active = true}, kg)
+    local bc = Instance.new("UICorner"); bc.CornerRadius = UDim.new(0, 20); bc.Parent = box
+    local g = Instance.new("UIGradient")
+    g.Rotation = 115
+    g.Color = ColorSequence.new({ColorSequenceKeypoint.new(0, Color3.fromRGB(96, 56, 30)),
+        ColorSequenceKeypoint.new(.5, Color3.fromRGB(56, 32, 18)), ColorSequenceKeypoint.new(1, Color3.fromRGB(24, 13, 7))})
+    g.Parent = box
+    cnew("UIStroke", {Color = Color3.fromRGB(232, 163, 92), Thickness = 1.6, Transparency = .15,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border}, box)
+    for _, spec in ipairs({{6, .75}, {14, .9}}) do
+        cnew("UIStroke", {Color = Color3.fromRGB(255, 188, 84), Thickness = spec[1], Transparency = spec[2],
+            ApplyStrokeMode = Enum.ApplyStrokeMode.Border}, box)
+    end
+    local scale = Instance.new("UIScale"); scale.Scale = .85; scale.Parent = box
+    TweenService:Create(scale, TweenInfo.new(.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = 1}):Play()
+
+    local cookie = Cookie.make(box, 46, 0, true, Random.new(7))
+    cookie.AnchorPoint, cookie.Position = Vector2.new(.5, 0), UDim2.new(.5, 0, 0, 14)
+    local function text(props, parent)
+        props.BackgroundTransparency = 1
+        props.TextColor3 = props.TextColor3 or Color3.fromRGB(255, 246, 234)
+        props.Font = props.Font or Enum.Font.GothamBold
+        return cnew("TextLabel", props, parent)
+    end
+    text({Text = "Cookie Hub", TextSize = 18, Position = UDim2.fromOffset(0, 66), Size = UDim2.new(1, 0, 0, 22)}, box)
+    local msg = text({Text = "Enter your key to continue", TextSize = 12, Font = Enum.Font.GothamMedium,
+        TextColor3 = Color3.fromRGB(201, 160, 120), Position = UDim2.fromOffset(0, 90), Size = UDim2.new(1, 0, 0, 16)}, box)
+
+    local input = cnew("TextBox", {PlaceholderText = "Key", Text = "", ClearTextOnFocus = false, TextSize = 14,
+        Font = Enum.Font.GothamSemibold, TextColor3 = Color3.fromRGB(255, 246, 234), PlaceholderColor3 = Color3.fromRGB(201, 160, 120),
+        BackgroundColor3 = Color3.fromRGB(74, 44, 26), BackgroundTransparency = .3, Position = UDim2.fromOffset(24, 118),
+        Size = UDim2.fromOffset(W - 48, 36)}, box)
+    local ic = Instance.new("UICorner"); ic.CornerRadius = UDim.new(0, 18); ic.Parent = input
+    cnew("UIStroke", {Color = Color3.fromRGB(120, 76, 44), Thickness = 1.2, Transparency = .35,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border}, input)
+    local pad = Instance.new("UIPadding"); pad.PaddingLeft, pad.PaddingRight = UDim.new(0, 16), UDim.new(0, 16); pad.Parent = input
+
+    local submit = cnew("TextButton", {Text = "Unlock", TextSize = 14, Font = Enum.Font.GothamBold, AutoButtonColor = false,
+        TextColor3 = Color3.new(1, 1, 1), BackgroundColor3 = Color3.fromRGB(201, 125, 60), Position = UDim2.fromOffset(24, 168),
+        Size = UDim2.fromOffset(W - 48 - 56, 38)}, box)
+    local sc = Instance.new("UICorner"); sc.CornerRadius = UDim.new(0, 19); sc.Parent = submit
+    local cancel = cnew("TextButton", {Text = "X", TextSize = 13, Font = Enum.Font.GothamBold, AutoButtonColor = false,
+        TextColor3 = Color3.fromRGB(255, 246, 234), BackgroundColor3 = Color3.fromRGB(74, 44, 26), Position = UDim2.fromOffset(W - 24 - 46, 168),
+        Size = UDim2.fromOffset(46, 38)}, box)
+    local cc = Instance.new("UICorner"); cc.CornerRadius = UDim.new(0, 19); cc.Parent = cancel
+    for _, b in ipairs({submit, cancel}) do
+        local base = b.BackgroundColor3
+        b.MouseEnter:Connect(function() TweenService:Create(b, TweenInfo.new(.12), {BackgroundColor3 = base:Lerp(Color3.new(1, 1, 1), .12)}):Play() end)
+        b.MouseLeave:Connect(function() TweenService:Create(b, TweenInfo.new(.15), {BackgroundColor3 = base}):Play() end)
+    end
+
+    local hub, done = nil, false
+    local handle = {}
+    function handle.Destroy()
+        done = true
+        if kg.Parent then kg:Destroy() end
+        if hub and hub.Destroy then hub.Destroy() end
+    end
+    local function shake()
+        for i = 1, 6 do
+            if done then return end
+            box.Position = UDim2.new(.5, (i % 2 == 0 and 1 or -1) * 9, .5, 0)
+            task.wait(.04)
+        end
+        box.Position = UDim2.fromScale(.5, .5)
+    end
+    local function try()
+        if done then return end
+        local typed = (input.Text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        if typed == HUB_KEY then
+            done = true
+            msg.Text, msg.TextColor3 = "Key accepted. Enjoy the cookies!", Color3.fromRGB(80, 210, 100)
+            rememberKey()
+            task.delay(.5, function()
+                TweenService:Create(scale, TweenInfo.new(.2), {Scale = .85}):Play()
+                task.wait(.2)
+                if kg.Parent then kg:Destroy() end
+                local ok, res = pcall(HubMain)
+                if ok then hub = res else warn("cookie hub: " .. tostring(res)) end
+            end)
+        else
+            msg.Text, msg.TextColor3 = "Wrong key, try again", Color3.fromRGB(255, 130, 120)
+            input.Text = ""
+            task.spawn(shake)
+        end
+    end
+    submit.Activated:Connect(try)
+    input.FocusLost:Connect(function(enter) if enter then try() end end)
+    cancel.Activated:Connect(handle.Destroy)
+    task.defer(function() if input.Parent then input:CaptureFocus() end end)
+    return handle
+end
+
+return KeyGate()
