@@ -366,7 +366,7 @@ local function ensureFolder(path)
 end
 
 local settings = {
-    speed = 1, loop = true, stopOnMove = false, walkSync = true, blend = 0.15, recordRate = 20,
+    speed = 1, loop = true, stopOnMove = false, walkSync = true, blend = 0.35, recordRate = 20,
     noclip = true, keyToggle = "RightControl", keyGui = "RightShift", keyStop = "X",
     keySpeedDown = "Minus", keySpeedUp = "Equals", keySpeedReset = "Zero",
     keyPause = "Y", keyRewind = "U", keyReverse = "I", keyDrive = "LeftAlt",
@@ -392,6 +392,7 @@ do -- load
         end
     end
 end
+if settings.blend == 0.15 then settings.blend = 0.35 end -- old default -> new crossfade default
 settings.stopOnMove = false
 
 local function saveData()
@@ -982,7 +983,7 @@ end)
 ----------------------------------------------------------------------
 -- Engine: state animations, emotes, blending, recording
 ----------------------------------------------------------------------
-local engine = {motors = {}, stateAnims = {}, gen = {}, token = 0, fadeT = 1, snapshot = {}, baked = {}, fitted = {}, parts = {}, collide = {}}
+local engine = {motors = {}, stateAnims = {}, gen = {}, token = 0, fadeT = 1, snapshot = {}, baked = {}, fitted = {}, parts = {}, collide = {}, prev = nil}
 local rec = {on = false, clip = nil, t = 0, acc = 0, frames = 0}
 local updateRecUI
 -- transport state (Play tab), live limb control (Live tab) and tricks (Tricks tab); logic is filled in further down
@@ -1155,11 +1156,20 @@ local function engineStep(dt)
     if desired then
         local cur = engine.current
         if not cur or cur.src ~= src then
-            for _, m in pairs(engine.motors) do engine.snapshot[m] = m.Transform end
+            local midFade = cur and engine.fadeT < settings.blend
+            if cur and not midFade then
+                -- crossfade: the old clip keeps playing underneath while the new one fades in
+                engine.prev = {anim = cur.anim, t = cur.t, loop = cur.loop ~= false, rate = cur.rate or 1}
+            else
+                -- first start, or interrupted mid-fade: fade from the pose that is currently on screen
+                engine.prev = nil
+                for _, m in pairs(engine.motors) do engine.snapshot[m] = m.Transform end
+            end
             engine.fadeT = 0
             cur = {src = src, anim = desired, t = 0}
             engine.current = cur
         end
+        cur.loop, cur.rate = loop, rate
         local dur = desired.duration
         if not engine.paused then cur.t += dt * settings.speed * rate * engine.dir end
         local t = cur.t
@@ -1177,10 +1187,30 @@ local function engineStep(dt)
         end
         engine.fadeT += dt
         local alpha = settings.blend > 0 and math.min(engine.fadeT / settings.blend, 1) or 1
+        local prev = engine.prev
+        if alpha >= 1 then
+            engine.prev = nil
+            prev = nil
+        elseif prev and not engine.paused then
+            -- keep the outgoing clip moving during the fade
+            prev.t += dt * settings.speed * prev.rate * engine.dir
+            local pd = prev.anim.duration
+            if prev.loop then prev.t = prev.t % pd else prev.t = math.clamp(prev.t, 0, pd) end
+        end
+        local ea = alpha * alpha * (3 - 2 * alpha) -- smoothstep
         for name, m in pairs(engine.motors) do
             local curve = desired.curves[name]
             local target = curve and sample(curve, t, dur, loop) or CFrame.identity
-            if alpha < 1 then target = (engine.snapshot[m] or target):Lerp(target, alpha) end
+            if alpha < 1 then
+                local from
+                if prev then
+                    local pc = prev.anim.curves[name]
+                    from = pc and sample(pc, prev.t, prev.anim.duration, prev.loop) or CFrame.identity
+                else
+                    from = engine.snapshot[m] or target
+                end
+                target = from:Lerp(target, ea)
+            end
             m.Transform = target
         end
     end
@@ -1229,6 +1259,7 @@ local function engineStart()
     for _, object in ipairs(copy:GetDescendants()) do track(object) end
     engine.partConn = copy.DescendantAdded:Connect(track)
     engine.current, engine.emote, engine.stateAnims, engine.gen, engine.snapshot, engine.fadeT = nil, nil, {}, {}, {}, 1
+    engine.prev = nil
     rigLabel.Text = engine.rig
     for _, s in ipairs(STATES) do refreshState(s) end
     engine.conn = RunService.PreSimulation:Connect(engineStep)
@@ -1239,6 +1270,7 @@ local function engineStop()
     if engine.partConn then engine.partConn:Disconnect(); engine.partConn = nil end
     engine.parts, engine.collide = {}, {}
     engine.copy, engine.hum, engine.root, engine.current, engine.emote = nil, nil, nil, nil, nil
+    engine.prev = nil
     engine.motors, engine.stateAnims = {}, {}
     engine.token += 1
     rec.on = false
@@ -1992,9 +2024,9 @@ label(tabG, "Stop emote when moving", 4, 0, 280, 30)
 switch(tabG, UDim2.fromOffset(306, 3), settings.stopOnMove, function(v) settings.stopOnMove = v; saveSoon() end)
 label(tabG, "Sync walk speed to movement", 4, 34, 280, 30)
 switch(tabG, UDim2.fromOffset(306, 37), settings.walkSync, function(v) settings.walkSync = v; saveSoon() end)
-label(tabG, "Blend", 4, 68, 50, 30)
+label(tabG, "Fade", 4, 68, 50, 30)
 local blendVal = label(tabG, string.format("%.2fs", settings.blend), 300, 68, 56, 30, {TextColor3 = C.dim, TextSize = 12})
-slider(tabG, 60, 76, 232, 0, 0.5, settings.blend, function(v)
+slider(tabG, 60, 76, 232, 0, 1.5, settings.blend, function(v)
     settings.blend = math.floor(v * 100 + 0.5) / 100
     blendVal.Text = string.format("%.2fs", settings.blend)
     saveSoon()
